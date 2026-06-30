@@ -209,4 +209,14 @@ def extract_nodes():
     # 提取所有节点名称用于策略组
     all_proxy_names = [p["name"] for p in config["proxies"]]
     for group in config.get("proxy-groups", []):
-        if group.get("
+        if group.get("name") in ["自动优选", "节点选择", "负载均衡"]:
+            # 使用 dict.fromkeys 保持顺序并去重名称
+            group["proxies"] = list(dict.fromkeys(group.get("proxies", []) + all_proxy_names))
+
+    with open("all_nodes.yaml", "w", encoding="utf-8") as f:
+        yaml.dump(config, f, allow_unicode=True, sort_keys=False, default_flow_style=False, width=1000)
+
+    print(f"✅ 完成：本次新抓取并入 {len(proxies)} 个，全库去重后共 {len(config['proxies'])} 个节点已写入 all_nodes.yaml")
+
+if __name__ == "__main__":
+    extract_nodes()
