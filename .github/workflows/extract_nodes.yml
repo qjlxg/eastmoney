@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'valid_subs.txt'
+      - '.github/workflows/extract_nodes.yml'
   workflow_dispatch:
 
 jobs:
