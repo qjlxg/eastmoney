@@ -39,7 +39,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           if [[ -n $(git status -s) ]]; then
-            git add all_nodes.yaml
+            git add all_nodes.txt
             git commit -m "chore: auto-update unique nodes [$(date +'%Y-%m-%d %H:%M:%S')]"
             git push
           else
