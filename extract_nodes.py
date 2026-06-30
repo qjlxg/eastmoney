@@ -68,7 +68,7 @@ def parse_node(node):
         if proto in PROTOCOLS:
             query = parse_qs(u.query)
             params = {k: v[0] for k, v in query.items()}
-            
+
             # 使用SHA256截取保证名称一致性
             stable_hash = hashlib.sha256(node.encode()).hexdigest()[:6]
             name = unquote(u.fragment) if u.fragment else f"{proto}_{stable_hash}"
@@ -88,7 +88,7 @@ def parse_node(node):
                         cipher, password = decoded.split(":", 1)
                         res["cipher"], res["password"] = cipher, password
                     else: return None
-            
+
             elif proto == "vless":
                 res["uuid"] = u.username
                 res["udp"] = True
@@ -113,7 +113,7 @@ def parse_node(node):
             elif proto in ["hysteria2", "hy2"]:
                 res["type"] = "hysteria2"
                 res["password"] = u.username
-            
+
             else:
                 if u.username: res["username"] = u.username
                 if u.password: res["password"] = u.password
@@ -145,7 +145,7 @@ def get_node_fingerprint(p):
 def extract_nodes():
     if not os.path.exists("valid_subs.txt"): return
     urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
-    
+
     raw_nodes = set()
     with ThreadPoolExecutor(max_workers=25) as ex:
         for content in ex.map(get_nodes_from_url, urls):
@@ -160,41 +160,37 @@ def extract_nodes():
     for n in raw_nodes:
         p = parse_node(n)
         if not p or not p.get("server"): continue
-        
+
         # 计算核心业务指纹
         fp = get_node_fingerprint(p)
         if fp in seen_fingerprints: continue
-            
+
         # 防止名称冲突：如果名称已存在但指纹不同，重命名
         if p["name"] in seen_names:
             p["name"] = f"{p['name']}_{fp[:4]}"
-            
+
         seen_names.add(p["name"])
         seen_fingerprints.add(fp)
         p["fingerprint"] = fp # 暂存指纹用于后续全库比对
         proxies.append(p)
 
-    if not proxies or not os.path.exists("rules.yaml"): return
+    if not proxies: return
 
-    with open("rules.yaml", "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
+    # 第二阶段：全库去重合并 (读取现有明文记录)
+    merged_proxies_map = {}
+    if os.path.exists("all_nodes.txt"):
+        with open("all_nodes.txt", "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    p = json.loads(line.strip())
+                    efp = get_node_fingerprint(p)
+                    merged_proxies_map[efp] = p
+                except: continue
 
-    # 第二阶段：全库去重合并
-    # 建立现有节点的指纹库
-    existing_proxies = config.get("proxies", [])
-    merged_proxies_map = {} # fingerprint -> proxy_dict
-
-    # 先处理原配置文件中的节点
-    for ep in existing_proxies:
-        efp = get_node_fingerprint(ep)
-        if efp not in merged_proxies_map:
-            merged_proxies_map[efp] = ep
-
-    # 再合并新抓取的节点（如果指纹已存在则忽略）
+    # 再合并新抓取的节点
     for np in proxies:
         nfp = np.pop("fingerprint", None) or get_node_fingerprint(np)
         if nfp not in merged_proxies_map:
-            # 确保名称不与已有节点名称冲突
             existing_names = {item["name"] for item in merged_proxies_map.values()}
             base_name = np["name"]
             counter = 1
@@ -203,20 +199,12 @@ def extract_nodes():
                 counter += 1
             merged_proxies_map[nfp] = np
 
-    # 更新到配置
-    config["proxies"] = list(merged_proxies_map.values())
+    # 更新到配置 (明文保存，每行一个JSON)
+    with open("all_nodes.txt", "w", encoding="utf-8") as f:
+        for p in merged_proxies_map.values():
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
-    # 提取所有节点名称用于策略组
-    all_proxy_names = [p["name"] for p in config["proxies"]]
-    for group in config.get("proxy-groups", []):
-        if group.get("name") in ["自动优选", "节点选择", "负载均衡"]:
-            # 使用 dict.fromkeys 保持顺序并去重名称
-            group["proxies"] = list(dict.fromkeys(group.get("proxies", []) + all_proxy_names))
-
-    with open("all_nodes.yaml", "w", encoding="utf-8") as f:
-        yaml.dump(config, f, allow_unicode=True, sort_keys=False, default_flow_style=False, width=1000)
-
-    print(f"✅ 完成：本次新抓取并入 {len(proxies)} 个，全库去重后共 {len(config['proxies'])} 个节点已写入 all_nodes.yaml")
+    print(f"✅ 完成：本次新抓取并入 {len(proxies)} 个，全库去重后共 {len(merged_proxies_map)} 个节点已写入 all_nodes.txt")
 
 if __name__ == "__main__":
     extract_nodes()
