@@ -1,11 +1,12 @@
 import requests
 import re
+import os
 from bs4 import BeautifulSoup
 
 # =========================
 # 配置
 # =========================
-BASE_URL = "https://t.me/s/freeVPNjd"
+CHANNELS_FILE = "channels.txt"
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 
     'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com'
@@ -14,48 +15,48 @@ BLACKLIST_DOMAINS = [
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-# =========================
-# 提取并清理链接 (不进行有效性校验)
-# =========================
-def extract_links(html):
+def extract_links_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text()
-    
-    # 精准匹配“订阅链接：”后的 URL
+    # 匹配“订阅链接：”后的 URL
     urls = re.findall(r'订阅链接[:：]\s*(https?://[^\s\u4e00-\u9fa5]+)', text)
     
-    final_subs = []
+    clean_subs = []
     for u in urls:
-        # 清洗末尾干扰字符
         clean_url = re.sub(r'[^\w/:.-]+$', '', u)
-        # 黑名单过滤
         if not any(domain in clean_url for domain in BLACKLIST_DOMAINS):
-            final_subs.append(clean_url)
-            
-    return list(set(final_subs))
+            clean_subs.append(clean_url)
+    return list(set(clean_subs))
 
-# =========================
-# 主流程
-# =========================
 def main():
-    print("[1] 获取频道内容...")
-    try:
-        response = session.get(BASE_URL, timeout=15)
-        if response.status_code != 200:
-            print("❌ 获取失败")
-            return
-    except Exception as e:
-        print(f"❌ 网络错误: {e}")
+    if not os.path.exists(CHANNELS_FILE):
+        print(f"❌ 配置文件 {CHANNELS_FILE} 不存在")
         return
 
-    print("[2] 提取所有链接...")
-    subs = extract_links(response.text)
-    
-    print(f"[3] 共发现 {len(subs)} 个链接，直接保存...")
+    # 读取频道列表
+    with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
+        channels = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
-    if subs:
+    all_found_subs = set()
+    
+    for url in channels:
+        print(f"正在抓取频道: {url}")
+        try:
+            response = session.get(url, timeout=15)
+            if response.status_code == 200:
+                subs = extract_links_from_html(response.text)
+                all_found_subs.update(subs)
+                print(f"  -> 发现 {len(subs)} 个链接")
+            else:
+                print(f"  -> 获取失败 (状态码: {response.status_code})")
+        except Exception as e:
+            print(f"  -> 网络错误: {e}")
+
+    print(f"\n[汇总] 共发现 {len(all_found_subs)} 个唯一链接，正在保存...")
+
+    if all_found_subs:
         with open("valid_subs.txt", "w", encoding="utf-8") as f:
-            for u in sorted(subs):
+            for u in sorted(all_found_subs):
                 f.write(u + "\n")
         print("✅ 已保存所有链接到 valid_subs.txt")
     else:
