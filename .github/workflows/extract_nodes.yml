@@ -5,6 +5,7 @@ on:
     paths:
       - 'valid_subs.txt'
       - '.github/workflows/extract_nodes.yml'
+      - 'extract_nodes.py'
   workflow_dispatch:
 
 jobs:
@@ -22,6 +23,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
       - name: Run Extraction Script
         run: |
