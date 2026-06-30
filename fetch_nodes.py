@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 # 配置
 # =========================
 CHANNELS_FILE = "channels.txt"
+BASE_PREFIX = "https://t.me/s/" # 自动补全前缀
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 
     'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com'
@@ -18,7 +19,6 @@ session.headers.update({"User-Agent": "Mozilla/5.0"})
 def extract_links_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text()
-    # 匹配“订阅链接：”后的 URL
     urls = re.findall(r'订阅链接[:：]\s*(https?://[^\s\u4e00-\u9fa5]+)', text)
     
     clean_subs = []
@@ -33,16 +33,17 @@ def main():
         print(f"❌ 配置文件 {CHANNELS_FILE} 不存在")
         return
 
-    # 读取频道列表
     with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
-        channels = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        # 读取频道名称，去除空行和注释
+        channel_names = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
     all_found_subs = set()
     
-    for url in channels:
-        print(f"正在抓取频道: {url}")
+    for name in channel_names:
+        full_url = f"{BASE_PREFIX}{name}"
+        print(f"正在抓取频道: {name}")
         try:
-            response = session.get(url, timeout=15)
+            response = session.get(full_url, timeout=15)
             if response.status_code == 200:
                 subs = extract_links_from_html(response.text)
                 all_found_subs.update(subs)
