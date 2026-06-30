@@ -13,11 +13,11 @@ session.headers.update({
 })
 
 lock = Lock()
-all_nodes = set()
+final_nodes = set()
 
-# ======================
+# =========================
 # 请求
-# ======================
+# =========================
 def fetch(url):
     try:
         r = session.get(url, timeout=15)
@@ -25,25 +25,30 @@ def fetch(url):
     except:
         return ""
 
-# ======================
-# 节点提取
-# ======================
-def extract_nodes(text):
+# =========================
+# Step1：提取订阅链接
+# =========================
+def extract_sub_links(text):
+    return set(re.findall(r'https?://[^\s"\'<>]+', text))
+
+# =========================
+# Step2：解析节点
+# =========================
+def parse_nodes(text):
     nodes = set()
 
-    # 1. 直接协议
+    # 直接节点
     nodes.update(re.findall(
         r'(vmess|vless|trojan|ss|socks5|hysteria2|hysteria|tuic|anytls)://[^\s\'"<>]+',
         text
     ))
 
-    # 2. base64块（增强版）
-    b64_blocks = re.findall(r'[A-Za-z0-9+/]{60,}={0,2}', text)
+    # base64（可选）
+    b64s = re.findall(r'[A-Za-z0-9+/]{60,}={0,2}', text)
 
-    for b64 in b64_blocks:
+    for b64 in b64s:
         try:
             decoded = base64.b64decode(b64 + "==", validate=False).decode("utf-8", errors="ignore")
-
             nodes.update(re.findall(
                 r'(vmess|vless|trojan|ss|socks5|hysteria2|hysteria|tuic|anytls)://[^\s\'"<>]+',
                 decoded
@@ -53,48 +58,58 @@ def extract_nodes(text):
 
     return nodes
 
-# ======================
-# 核心：直接解析 message
-# ======================
-def parse_page(html):
-    soup = BeautifulSoup(html, "html.parser")
+# =========================
+# Step3：处理订阅链接
+# =========================
+def process_sub(url):
+    content = fetch(url)
+    if not content:
+        return set()
 
-    messages = soup.select(".tgme_widget_message_text")
+    return parse_nodes(content)
 
-    nodes = set()
-
-    for msg in messages:
-        text = msg.get_text(separator=" ", strip=True)
-        nodes.update(extract_nodes(text))
-
-    return nodes
-
-# ======================
-# main
-# ======================
+# =========================
+# 主流程
+# =========================
 def main():
-    print("抓取 Telegram 页面...")
+    print("[1] 获取 Telegram 页面...")
 
     html = fetch(BASE_URL)
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text()
 
-    if not html:
-        print("❌ 页面为空")
+    print("[2] 提取订阅链接...")
+
+    links = extract_sub_links(text)
+
+    # ⚠️ 过滤 Telegram 自己的链接
+    subs = [x for x in links if x.startswith("http") and "t.me" not in x]
+
+    print(f"[3] 找到订阅链接: {len(subs)}")
+
+    if not subs:
+        print("❌ 没有找到外部订阅链接")
         return
 
-    print("解析 messages...")
+    print("[4] 并发抓取订阅内容...")
 
-    nodes = parse_page(html)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(process_sub, subs)
 
-    print(f"提取节点数量: {len(nodes)}")
+        for nodes in results:
+            with lock:
+                final_nodes.update(nodes)
 
-    if nodes:
+    print(f"[5] 总节点数量: {len(final_nodes)}")
+
+    if final_nodes:
         with open("all_nodes.txt", "w", encoding="utf-8") as f:
-            for n in sorted(nodes):
+            for n in sorted(final_nodes):
                 f.write(n + "\n")
 
         print("✅ 已保存 all_nodes.txt")
     else:
-        print("❌ 没抓到节点（说明频道内容可能是图片/加密/二次渲染）")
+        print("❌ 订阅内容里仍然没有节点")
 
 if __name__ == "__main__":
     main()
