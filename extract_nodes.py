@@ -1,5 +1,5 @@
-import re, os, requests, base64, yaml, json
-from urllib.parse import urlparse
+import re, os, requests, base64, yaml, json, hashlib
+from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -51,7 +51,7 @@ def get_nodes_from_url(url):
         return ""
 
 # ----------------------------
-# node解析
+# node解析（已优化解析逻辑）
 # ----------------------------
 def parse_node(node):
     try:
@@ -68,28 +68,47 @@ def parse_node(node):
 
         if node.startswith("trojan://"):
             u = urlparse(node)
+            query = parse_qs(u.query)
+            params = {k: v[0] for k, v in query.items()}
             return {
                 "name": u.fragment or "trojan",
                 "type": "trojan",
                 "server": u.hostname,
                 "port": u.port,
-                "password": u.username
+                "password": u.username,
+                "sni": params.get("sni", u.hostname),
+                "tls": True
             }
 
         if node.startswith("vless://"):
             u = urlparse(node)
-            return {
-                "name": u.fragment or "vless",
+            query = parse_qs(u.query)
+            params = {k: v[0] for k, v in query.items()}
+            node_cfg = {
+                "name": u.fragment or f"vless_{u.hostname}",
                 "type": "vless",
                 "server": u.hostname,
                 "port": u.port,
-                "uuid": u.username
+                "uuid": u.username,
+                "tls": True if params.get("security") in ["tls", "reality"] else False,
+                "network": params.get("type", "tcp")
             }
+            if params.get("security") == "reality":
+                node_cfg.update({
+                    "reality": True,
+                    "sni": params.get("sni", u.hostname),
+                    "fp": params.get("fp", "chrome"),
+                    "pbk": params.get("pbk", ""),
+                    "sid": params.get("sid", ""),
+                })
+            return node_cfg
 
         if any(node.startswith(p + "://") for p in PROTOCOLS):
             proto = node.split("://")[0]
+            # 使用 md5 代替 hash 保证名称稳定性
+            stable_name = hashlib.md5(node.encode()).hexdigest()[:8]
             return {
-                "name": f"{proto}_{hash(node) % 10000}",
+                "name": f"{proto}_{stable_name}",
                 "type": proto,
                 "raw": node
             }
