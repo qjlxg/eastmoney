@@ -17,7 +17,7 @@ TIMEOUT = 15
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 })
 
 lock = Lock()
@@ -34,41 +34,24 @@ def fetch(url):
         return ""
 
 # =========================
-# 提取订阅链接
+# 提取外部订阅链接
 # =========================
-def extract_links(text):
-    links = re.findall(r'https?://[^\s"\'<>]+', text)
+def extract_links(html):
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text()
+
+    urls = re.findall(r'https?://[^\s"\'<>]+', text)
 
     subs = []
-    for l in links:
-        # 过滤 Telegram 自己链接
-        if "t.me" not in l:
-            subs.append(l)
+    for u in urls:
+        # 过滤 telegram 自身
+        if "t.me" not in u:
+            subs.append(u)
 
     return list(set(subs))
 
 # =========================
-# base64 解码
-# =========================
-def try_b64(text):
-    try:
-        if len(text) < 50:
-            return None
-        return base64.b64decode(text + "==").decode("utf-8", errors="ignore")
-    except:
-        return None
-
-# =========================
-# gzip 解码（很多订阅会用）
-# =========================
-def try_gzip(data):
-    try:
-        return gzip.decompress(data).decode("utf-8", errors="ignore")
-    except:
-        return None
-
-# =========================
-# 提取节点
+# 节点提取（核心）
 # =========================
 def extract_nodes(text):
     return set(re.findall(
@@ -77,98 +60,118 @@ def extract_nodes(text):
     ))
 
 # =========================
-# 智能解析订阅
+# base64 解码
+# =========================
+def decode_base64(text):
+    try:
+        return base64.b64decode(text + "==", validate=False).decode("utf-8", errors="ignore")
+    except:
+        return None
+
+# =========================
+# gzip 解码
+# =========================
+def decode_gzip(data):
+    try:
+        return gzip.decompress(data).decode("utf-8", errors="ignore")
+    except:
+        return None
+
+# =========================
+# 订阅解析（万能）
 # =========================
 def parse_subscription(content):
 
+    if not content:
+        return set()
+
+    content = content.strip()
+
     nodes = set()
 
-    if not content:
-        return nodes
-
-    raw = content.strip()
-
-    # ========= 1. JSON订阅 =========
-    if raw.startswith("{"):
+    # =========================
+    # JSON订阅
+    # =========================
+    if content.startswith("{"):
         try:
-            data = json.loads(raw)
+            data = json.loads(content)
             return extract_nodes(json.dumps(data))
         except:
             pass
 
-    # ========= 2. Clash YAML =========
-    if "proxies:" in raw:
+    # =========================
+    # Clash YAML订阅
+    # =========================
+    if "proxies:" in content:
         try:
-            data = yaml.safe_load(raw)
+            data = yaml.safe_load(content)
             return extract_nodes(json.dumps(data))
         except:
             pass
 
-    # ========= 3. base64订阅 =========
-    decoded = try_b64(raw)
+    # =========================
+    # base64订阅（最常见）
+    # =========================
+    decoded = decode_base64(content)
     if decoded:
         nodes |= extract_nodes(decoded)
 
-        # 再二次递归（订阅套订阅）
-        sub_links = extract_links(decoded)
-        for l in sub_links:
-            sub_content = fetch(l)
-            nodes |= parse_subscription(sub_content)
+        # 递归：订阅套订阅
+        links = re.findall(r'https?://[^\s"\'<>]+', decoded)
+        for l in links:
+            sub = fetch(l)
+            nodes |= parse_subscription(sub)
 
         return nodes
 
-    # ========= 4. gzip订阅 =========
+    # =========================
+    # gzip订阅（少见但存在）
+    # =========================
     try:
-        gz = base64.b64decode(raw + "==", validate=False)
-        decoded = try_gzip(gz)
+        raw = base64.b64decode(content + "==", validate=False)
+        decoded = decode_gzip(raw)
         if decoded:
             nodes |= extract_nodes(decoded)
             return nodes
     except:
         pass
 
-    # ========= 5. 普通文本 =========
-    nodes |= extract_nodes(raw)
+    # =========================
+    # 纯文本
+    # =========================
+    nodes |= extract_nodes(content)
 
     return nodes
 
 # =========================
-# Telegram页面解析
-# =========================
-def get_page():
-    return fetch(BASE_URL)
-
-def get_links(html):
-    soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text()
-
-    return extract_links(text)
-
-# =========================
-# 处理订阅
+# 处理单个订阅
 # =========================
 def process(url):
     content = fetch(url)
     return parse_subscription(content)
 
 # =========================
-# 主函数
+# 主流程
 # =========================
 def main():
 
-    print("[1] 获取 Telegram 页面...")
-    html = get_page()
+    print("[1] 获取Telegram页面...")
+    html = fetch(BASE_URL)
 
-    print("[2] 提取订阅链接...")
-    subs = get_links(html)
-
-    print(f"[3] 找到订阅: {len(subs)}")
-
-    if not subs:
-        print("❌ 没有订阅链接")
+    if not html:
+        print("❌ 页面获取失败")
         return
 
-    print("[4] 开始解析订阅内容...")
+    print("[2] 提取订阅链接...")
+    subs = extract_links(html)
+
+    print(f"[3] 订阅数量: {len(subs)}")
+
+    if not subs:
+        print("❌ 没有找到外链订阅")
+        return
+
+    print("[4] 开始解析订阅...")
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = [ex.submit(process, u) for u in subs]
@@ -189,7 +192,7 @@ def main():
 
         print("✅ 已保存 all_nodes.txt")
     else:
-        print("❌ 仍然没有解析出节点（说明订阅被加密/图片化/风控）")
+        print("❌ 仍然为0：说明订阅可能是加密/图片/JS接口")
 
 if __name__ == "__main__":
     main()
