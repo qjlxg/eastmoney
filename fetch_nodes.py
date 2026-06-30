@@ -19,15 +19,13 @@ BLACKLIST_DOMAINS = [
 ]
 
 session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0"
-})
+session.headers.update({"User-Agent": "Mozilla/5.0"})
 
 lock = Lock()
 valid_subs = set()
 
 # =========================
-# 请求
+# 请求与校验
 # =========================
 def fetch(url):
     try:
@@ -36,105 +34,67 @@ def fetch(url):
     except:
         return 0, ""
 
-# =========================
-# 内容校验函数
-# =========================
 def is_valid_sub_content(content):
-    """
-    判断返回内容是否为有效的订阅数据
-    """
     content = content.strip()
-    if not content:
-        return False
+    if not content or len(content) < 50: return False
     
-    # 检查是否为 Clash 配置 (YAML)
-    if "proxies:" in content or "proxy-groups:" in content:
-        return True
-
-    # 尝试检查 Base64
+    if "proxies:" in content or "proxy-groups:" in content: return True
+    
     try:
-        # 补全 padding 以防解码失败
+        # 处理可能的 Base64 编码
         padding = (4 - len(content) % 4) % 4
-        decoded = base64.b64decode(content + "=" * padding, validate=True).decode('utf-8', errors='ignore')
-        if any(scheme in decoded for scheme in ['vmess://', 'ss://', 'vless://', 'trojan://', 'ssr://']):
-            return True
-    except:
-        pass
+        decoded = base64.b64decode(content + "=" * padding, validate=False).decode('utf-8', errors='ignore')
+        if any(s in decoded for s in ['vmess://', 'ss://', 'vless://', 'trojan://', 'ssr://']): return True
+    except: pass
     
-    # 检查是否为普通的节点列表
-    if any(content.startswith(scheme) for scheme in ['vmess://', 'ss://', 'vless://', 'trojan://', 'ssr://']):
-        return True
-
+    if any(content.startswith(s) for s in ['vmess://', 'ss://', 'vless://', 'trojan://', 'ssr://']): return True
     return False
 
 # =========================
-# 提取并清理订阅链接
+# 针对性提取逻辑 (适配 1000012088.jpg)
 # =========================
 def extract_links(html):
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text()
-
-    # 匹配 http/https 开头，直到遇到中文、空格、引号、尖括号等
-    urls = re.findall(r'https?://[^\s\u4e00-\u9fa5"\'<>]+', text)
-
-    subs = []
+    
+    # 核心：精准匹配“订阅链接：”后的 URL，直到遇到非 URL 字符
+    urls = re.findall(r'订阅链接[:：]\s*(https?://[^\s\u4e00-\u9fa5]+)', text)
+    
+    clean_subs = []
     for u in urls:
-        # 去掉链接末尾可能存在的标点或特殊字符
+        # 再次清洗末尾可能残留的特殊标点
         clean_url = re.sub(r'[^\w/:.-]+$', '', u)
-        
-        # 检查黑名单
-        if any(domain in clean_url for domain in BLACKLIST_DOMAINS):
-            continue
-            
-        subs.append(clean_url)
+        if not any(domain in clean_url for domain in BLACKLIST_DOMAINS):
+            clean_subs.append(clean_url)
+    return list(set(clean_subs))
 
-    return list(set(subs))
-
-# =========================
-# 处理订阅
-# =========================
 def process(url):
     code, content = fetch(url)
-    if code == 200 and is_valid_sub_content(content):
-        return url
-    return None
+    return url if code == 200 and is_valid_sub_content(content) else None
 
 # =========================
 # 主流程
 # =========================
 def main():
-    print("[1] 获取 Telegram 页面...")
+    print("[1] 获取频道内容...")
     code, html = fetch(BASE_URL)
-    if code != 200:
-        print("❌ Telegram页面获取失败")
-        return
+    if code != 200: return
 
-    print("[2] 提取并清洗订阅链接...")
+    print("[2] 提取链接...")
     subs = extract_links(html)
-    print(f"[3] 发现订阅: {len(subs)}")
-
-    if not subs:
-        print("❌ 没有订阅链接")
-        return
-
-    print("[4] 检测订阅有效性...")
+    
+    print(f"[3] 检测中，发现链接数: {len(subs)}")
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = [ex.submit(process, u) for u in subs]
         for f in as_completed(futures):
-            result = f.result()
-            if result:
-                with lock:
-                    valid_subs.add(result)
-
-    print(f"[5] 有效订阅数量: {len(valid_subs)}")
+            res = f.result()
+            if res:
+                with lock: valid_subs.add(res)
 
     if valid_subs:
         with open("valid_subs.txt", "w", encoding="utf-8") as f:
-            for u in sorted(valid_subs):
-                f.write(u + "\n")
-        print("✅ 已保存 valid_subs.txt")
-    else:
-        print("❌ 没有有效订阅")
+            for u in sorted(valid_subs): f.write(u + "\n")
+        print(f"✅ 保存成功，共 {len(valid_subs)} 个有效订阅")
 
 if __name__ == "__main__":
     main()
