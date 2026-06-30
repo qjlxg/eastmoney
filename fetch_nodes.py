@@ -1,81 +1,72 @@
 import requests
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from bs4 import BeautifulSoup  # 建议安装：pip install beautifulsoup4
 
 # 目标频道
-URL_LIST = ["https://t.me/s/freeVPNjd"]
+BASE_URL = "https://t.me/s/freeVPNjd"
 
 def get_session():
-    """创建一个带有重试机制的会话"""
     session = requests.Session()
-    # 策略：如果遇到 429 或 5xx 错误，自动重试 3 次
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    })
     return session
 
-def fetch_url(url):
-    session = get_session()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Referer': 'https://t.me/'
-    }
+def fetch_page(url):
     try:
-        response = session.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        print(f"[SUCCESS] 成功抓取: {url} | 内容长度: {len(response.text)}")
+        response = get_session().get(url, timeout=15)
         return response.text
-    except Exception as e:
-        print(f"[ERROR] 抓取失败 {url}: {str(e)}")
+    except:
         return ""
 
+def get_sub_links(html):
+    """从目录页提取所有文章链接"""
+    soup = BeautifulSoup(html, 'html.parser')
+    # Telegram 频道消息的链接通常包含 /s/freeVPNjd/123 格式
+    links = set()
+    for a in soup.find_all('a', href=True):
+        if '/s/freeVPNjd/' in a['href'] and len(a['href'].split('/')) > 4:
+            # 补全完整链接
+            full_url = "https://t.me" + a['href']
+            links.add(full_url)
+    return list(links)
+
 def parse_nodes(text):
-    # 针对各种协议的匹配规则
+    # 扩大匹配范围，涵盖明文节点和Base64块
     patterns = [
-        r'(vmess://[a-zA-Z0-9+/=]+)',
-        r'(vless://[a-zA-Z0-9@:?#._-]+)',
-        r'(trojan://[a-zA-Z0-9@:?#._-]+)',
-        r'(ss://[a-zA-Z0-9@:?#._-]+)',
-        r'(socks5://[a-zA-Z0-9@:?#._-]+)',
-        r'(http://[a-zA-Z0-9@:?#._-]+)',
-        r'(hysteria2://[a-zA-Z0-9@:?#._-]+)',
-        r'(hysteria://[a-zA-Z0-9@:?#._-]+)',
-        r'(tuic://[a-zA-Z0-9@:?#._-]+)',
-        r'(anytls://[a-zA-Z0-9@:?#._-]+)'
+        r'(vmess|vless|trojan|ss|socks5|http|hysteria2|hysteria|tuic|anytls)://[a-zA-Z0-9@:?#._=-]+',
+        r'([a-zA-Z0-9+/]{20,}=+)' # 捕获可能的Base64编码节点块
     ]
     nodes = set()
     for p in patterns:
-        matches = re.findall(p, text)
-        nodes.update(matches)
+        nodes.update(re.findall(p, text))
     return nodes
 
 def main():
-    print("开始抓取任务...")
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        contents = list(executor.map(fetch_url, URL_LIST))
+    # 1. 获取目录页
+    print("正在抓取目录页...")
+    main_html = fetch_page(BASE_URL)
+    sub_links = get_sub_links(main_html)
+    print(f"找到 {len(sub_links)} 个详情页，开始并行抓取...")
+
+    # 2. 并行抓取所有详情页
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        pages = list(executor.map(fetch_page, sub_links))
     
+    # 3. 提取所有节点
     all_nodes = set()
-    for content in contents:
-        if content:
-            all_nodes.update(parse_nodes(content))
+    for page in pages:
+        all_nodes.update(parse_nodes(page))
     
-    if not all_nodes:
-        print("[WARNING] 未匹配到任何节点，请检查正则或目标页面结构。")
-    else:
-        print(f"[INFO] 总共获取到 {len(all_nodes)} 个节点。")
+    # 4. 保存结果
+    if all_nodes:
         with open("all_nodes.txt", "w", encoding="utf-8") as f:
             for node in sorted(all_nodes):
                 f.write(node + "\n")
+        print(f"成功保存 {len(all_nodes)} 个节点。")
+    else:
+        print("未抓取到节点，请检查正则匹配或网站结构变化。")
 
 if __name__ == "__main__":
     main()
