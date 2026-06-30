@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/update_nodes.yml'
       - 'fetch_nodes.py'
+      - 'channels.txt'
      
   
   # 2. 定时任务：北京时间每天早上 08:00 (UTC 00:00)
