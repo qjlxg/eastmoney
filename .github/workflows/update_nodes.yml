@@ -1,0 +1,53 @@
+name: update_nodes
+
+on:
+  # 1. 代码提交变动时触发
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/update_nodes.yml'
+      - 'scripts/fetch_nodes.py'
+      - 'requirements.txt'
+  
+  # 2. 定时任务：北京时间每天早上 08:00 (UTC 00:00)
+  schedule:
+    - cron: '0 0 * * *'
+    
+  # 3. 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyyaml
+
+      - name: 运行节点抓取与处理脚本
+        run: python fetch_nodes.py
+
+      - name: 提交并推送结果
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # 检查是否有变动
+          if [ -n "$(git status --porcelain)" ]; then
+            git add all_nodes.txt
+            git commit -m "chore: 更新订阅节点列表 $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          else
+            echo "无节点内容更新，跳过提交。"
+          fi
