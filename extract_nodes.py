@@ -1,5 +1,5 @@
-import re, os, requests, base64, yaml, json, hashlib
-from urllib.parse import urlparse, parse_qs
+import re, os, requests, base64, yaml, json, socket
+from urllib.parse import urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -26,9 +26,10 @@ session.mount("https://", HTTPAdapter(max_retries=retry))
 # ----------------------------
 def b64_decode(data: str) -> str:
     data = data.strip()
+    data = data.replace('-', '+').replace('_', '/') # 处理urlsafe
     data += "=" * (-len(data) % 4)
 
-    for func in (base64.urlsafe_b64decode, base64.b64decode):
+    for func in (base64.b64decode, base64.urlsafe_b64decode):
         try:
             return func(data).decode("utf-8", "ignore")
         except:
@@ -51,10 +52,11 @@ def get_nodes_from_url(url):
         return ""
 
 # ----------------------------
-# node解析（已优化解析逻辑）
+# node解析（补充了对各协议的详细解析逻辑）
 # ----------------------------
 def parse_node(node):
     try:
+        # VMess 解析
         if node.startswith("vmess://"):
             raw = b64_decode(node[8:])
             j = json.loads(raw)
@@ -63,57 +65,47 @@ def parse_node(node):
                 "type": "vmess",
                 "server": j.get("add"),
                 "port": int(j.get("port", 0)),
-                "uuid": j.get("id")
+                "uuid": j.get("id"),
+                "alterId": int(j.get("aid", 0)),
+                "cipher": "auto",
+                "udp": True
             }
 
-        if node.startswith("trojan://"):
-            u = urlparse(node)
-            query = parse_qs(u.query)
-            params = {k: v[0] for k, v in query.items()}
-            return {
-                "name": u.fragment or "trojan",
-                "type": "trojan",
+        # URL 格式解析 (Trojan, VLESS, SS, HY2, TUIC)
+        u = urlparse(node)
+        proto = u.scheme.lower()
+        
+        if proto in PROTOCOLS:
+            name = unquote(u.fragment) if u.fragment else f"{proto}_{hash(node) % 10000}"
+            # 基础结构
+            res = {
+                "name": name,
+                "type": proto if proto != "hysteria2" else "hysteria2",
                 "server": u.hostname,
-                "port": u.port,
-                "password": u.username,
-                "sni": params.get("sni", u.hostname),
-                "tls": True
+                "port": int(u.port) if u.port else 443,
             }
 
-        if node.startswith("vless://"):
-            u = urlparse(node)
-            query = parse_qs(u.query)
-            params = {k: v[0] for k, v in query.items()}
-            node_cfg = {
-                "name": u.fragment or f"vless_{u.hostname}",
-                "type": "vless",
-                "server": u.hostname,
-                "port": u.port,
-                "uuid": u.username,
-                "tls": True if params.get("security") in ["tls", "reality"] else False,
-                "network": params.get("type", "tcp")
-            }
-            if params.get("security") == "reality":
-                node_cfg.update({
-                    "reality": True,
-                    "sni": params.get("sni", u.hostname),
-                    "fp": params.get("fp", "chrome"),
-                    "pbk": params.get("pbk", ""),
-                    "sid": params.get("sid", ""),
-                })
-            return node_cfg
+            # 协议特定字段处理
+            if proto == "ss":
+                # ss://base64(method:password)@host:port
+                if "@" not in u.netloc:
+                    user_info = b64_decode(u.username).split(":")
+                    res["cipher"] = user_info[0]
+                    res["password"] = user_info[1]
+                else:
+                    res["cipher"] = u.username
+                    res["password"] = u.password
+            elif proto in ["trojan", "vless", "hysteria2", "hy2", "tuic"]:
+                res["password"] = u.username or u.netloc.split('@')[0]
+                if proto == "vless":
+                    res["uuid"] = res.pop("password")
+                    res["udp"] = True
+                if proto == "hysteria2" or proto == "hy2":
+                    res["type"] = "hysteria2"
+            
+            return res
 
-        if any(node.startswith(p + "://") for p in PROTOCOLS):
-            proto = node.split("://")[0]
-            # 使用 md5 代替 hash 保证名称稳定性
-            stable_name = hashlib.md5(node.encode()).hexdigest()[:8]
-            return {
-                "name": f"{proto}_{stable_name}",
-                "type": proto,
-                "raw": node
-            }
-
-    except:
+    except Exception:
         return None
 
 # ----------------------------
@@ -121,58 +113,81 @@ def parse_node(node):
 # ----------------------------
 def extract_nodes():
     if not os.path.exists("valid_subs.txt"):
+        print("❌ 错误：找不到 valid_subs.txt")
         return
 
     urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
-
     pattern = r'(?:' + '|'.join(PROTOCOLS) + r')://[^\s<>"\']+'
-
+    
     raw_nodes = set()
 
+    # 并行抓取内容
+    print(f"正在从 {len(urls)} 个订阅源抓取节点...")
     with ThreadPoolExecutor(max_workers=8) as ex:
         for content in ex.map(get_nodes_from_url, urls):
             if not content:
                 continue
-            raw_nodes.update(re.findall(pattern, content, re.IGNORECASE))
+            # 提取符合协议格式的链接
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            raw_nodes.update(matches)
 
     proxies = []
-    seen = set()
+    seen_names = set()
+    seen_endpoints = set() # 用于物理去重 (server+port)
 
     for n in raw_nodes:
         p = parse_node(n)
-        if not p:
+        if not p or not p.get("server") or not p.get("port"):
             continue
-        if p["name"] in seen:
+            
+        # 物理去重：地址 + 端口
+        endpoint = f"{p['server']}:{p['port']}"
+        if endpoint in seen_endpoints:
             continue
-        seen.add(p["name"])
+            
+        # 名称去重
+        if p["name"] in seen_names:
+            p["name"] = f"{p['name']}_{hash(endpoint) % 100}"
+            
+        seen_names.add(p["name"])
+        seen_endpoints.add(endpoint)
         proxies.append(p)
 
-    proxy_names = [p["name"] for p in proxies]
+    if not proxies:
+        print("⚠️ 未找到有效节点")
+        return
 
+    # 读取模板
     if not os.path.exists("rules.yaml"):
+        print("❌ 错误：找不到 rules.yaml 模板")
         return
 
     with open("rules.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
 
-    # 安全 merge（不覆盖）
+    # 安全 merge
     config.setdefault("proxies", [])
     config["proxies"].extend(proxies)
 
-    # 去重 proxies（按 name）
+    # 最终去重（按 name）
     uniq = {p["name"]: p for p in config["proxies"]}
     config["proxies"] = list(uniq.values())
 
-    # 更新 group（防重复）
-    for group in config.get("proxy-groups", []):
-        if group.get("name") in ["自动优选", "节点选择"]:
-            base = [p for p in proxy_names if p not in group.get("proxies", [])]
-            group["proxies"] = list(dict.fromkeys(group.get("proxies", []) + base))
+    # 更新 proxy-groups
+    proxy_names = [p["name"] for p in proxies]
+    if "proxy-groups" in config:
+        for group in config.get("proxy-groups", []):
+            # 仅向指定组注入节点
+            if group.get("name") in ["自动优选", "节点选择", "负载均衡"]:
+                existing = group.get("proxies", [])
+                # 合并并保持唯一性
+                group["proxies"] = list(dict.fromkeys(existing + proxy_names))
 
+    # 写入文件
     with open("all_nodes.yaml", "w", encoding="utf-8") as f:
         yaml.dump(config, f, allow_unicode=True, sort_keys=False)
 
-    print(f"✅ 完成：{len(proxies)} 个节点已写入 all_nodes.yaml")
+    print(f"✅ 完成：新增 {len(proxies)} 个节点，总计 {len(config['proxies'])} 个节点已写入 all_nodes.yaml")
 
 if __name__ == "__main__":
     extract_nodes()
