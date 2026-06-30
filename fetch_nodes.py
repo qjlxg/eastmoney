@@ -94,10 +94,8 @@ def process(url):
     if code != 200:
         return None
 
-    if is_valid_subscription(content):
-        return url
-
-    return None
+    # 不管是不是有效期，只要请求成功，都返回url
+    return url
 
 # =========================
 # 主流程
