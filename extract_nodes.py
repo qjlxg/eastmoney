@@ -44,7 +44,7 @@ def get_nodes_from_url(url):
     except: return ""
 
 # ----------------------------
-# node解析（重点：结构化 Reality 选项与增强 SS 解析）
+# node解析
 # ----------------------------
 def parse_node(node):
     try:
@@ -122,6 +122,24 @@ def parse_node(node):
     except Exception: return None
 
 # ----------------------------
+# 增强去重指纹计算
+# ----------------------------
+def get_node_fingerprint(p):
+    """根据核心连接参数生成唯一指纹，解决同一节点不同名称的问题"""
+    try:
+        # 核心参数：协议、服务器(小写)、端口、关键凭据
+        core_parts = {
+            "t": p.get("type"),
+            "s": str(p.get("server", "")).lower().strip(),
+            "p": p.get("port"),
+            "cred": p.get("uuid") or p.get("password") or p.get("username", "")
+        }
+        # 将参数排序并序列化为JSON，再生成MD5
+        return hashlib.md5(json.dumps(core_parts, sort_keys=True).encode()).hexdigest()
+    except:
+        return hashlib.md5(str(p).encode()).hexdigest()
+
+# ----------------------------
 # 主流程
 # ----------------------------
 def extract_nodes():
@@ -132,33 +150,28 @@ def extract_nodes():
     with ThreadPoolExecutor(max_workers=25) as ex:
         for content in ex.map(get_nodes_from_url, urls):
             if content:
-                chunks = content.split()
-                raw_nodes.update(c for c in chunks if any(p in c for p in PROTOCOLS) and "://" in c)
+                # 兼容多种分割符并过滤空字符
+                chunks = re.split(r'[\s\n\r]+', content)
+                raw_nodes.update(c for c in chunks if any(p + "://" in c.lower() for p in PROTOCOLS))
 
     proxies, seen_names, seen_fingerprints = [], set(), set()
 
+    # 第一阶段：解析并初步去重本次抓取的节点
     for n in raw_nodes:
         p = parse_node(n)
         if not p or not p.get("server"): continue
         
-        cred = p.get("uuid") or p.get("password") or ""
-        fingerprint = hashlib.md5(
-            json.dumps({
-                "s": p["server"],
-                "p": p["port"],
-                "c": cred,
-                "t": p.get("type"),
-                "sni": p.get("sni"),
-            }, sort_keys=True).encode()
-        ).hexdigest()
-        
-        if fingerprint in seen_fingerprints: continue
+        # 计算核心业务指纹
+        fp = get_node_fingerprint(p)
+        if fp in seen_fingerprints: continue
             
+        # 防止名称冲突：如果名称已存在但指纹不同，重命名
         if p["name"] in seen_names:
-            p["name"] = f"{p['name']}_{hash(fingerprint) % 1000}"
+            p["name"] = f"{p['name']}_{fp[:4]}"
             
         seen_names.add(p["name"])
-        seen_fingerprints.add(fingerprint)
+        seen_fingerprints.add(fp)
+        p["fingerprint"] = fp # 暂存指纹用于后续全库比对
         proxies.append(p)
 
     if not proxies or not os.path.exists("rules.yaml"): return
@@ -166,19 +179,34 @@ def extract_nodes():
     with open("rules.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
 
-    config.setdefault("proxies", [])
-    config["proxies"].extend(proxies)
-    config["proxies"] = list({p["name"]: p for p in config["proxies"]}.values())
+    # 第二阶段：全库去重合并
+    # 建立现有节点的指纹库
+    existing_proxies = config.get("proxies", [])
+    merged_proxies_map = {} # fingerprint -> proxy_dict
 
-    proxy_names = [p["name"] for p in proxies]
+    # 先处理原配置文件中的节点
+    for ep in existing_proxies:
+        efp = get_node_fingerprint(ep)
+        if efp not in merged_proxies_map:
+            merged_proxies_map[efp] = ep
+
+    # 再合并新抓取的节点（如果指纹已存在则忽略）
+    for np in proxies:
+        nfp = np.pop("fingerprint", None) or get_node_fingerprint(np)
+        if nfp not in merged_proxies_map:
+            # 确保名称不与已有节点名称冲突
+            existing_names = {item["name"] for item in merged_proxies_map.values()}
+            base_name = np["name"]
+            counter = 1
+            while np["name"] in existing_names:
+                np["name"] = f"{base_name}_{counter}"
+                counter += 1
+            merged_proxies_map[nfp] = np
+
+    # 更新到配置
+    config["proxies"] = list(merged_proxies_map.values())
+
+    # 提取所有节点名称用于策略组
+    all_proxy_names = [p["name"] for p in config["proxies"]]
     for group in config.get("proxy-groups", []):
-        if group.get("name") in ["自动优选", "节点选择", "负载均衡"]:
-            group["proxies"] = list(dict.fromkeys(group.get("proxies", []) + proxy_names))
-
-    with open("all_nodes.yaml", "w", encoding="utf-8") as f:
-        yaml.dump(config, f, allow_unicode=True, sort_keys=False, default_flow_style=False, width=1000)
-
-    print(f"✅ 完成：本次抓取 {len(proxies)} 个，总库共 {len(config['proxies'])} 个节点已写入 all_nodes.yaml")
-
-if __name__ == "__main__":
-    extract_nodes()
+        if group.get("
