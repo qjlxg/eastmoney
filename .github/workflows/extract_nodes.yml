@@ -1,0 +1,40 @@
+name: Extract Nodes
+
+on:
+  push:
+    paths:
+      - 'valid_subs.txt'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TZ: Asia/Shanghai # 设置时区为北京时间
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run Extraction Script
+        run: |
+          date
+          python extract_nodes.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if [[ -n $(git status -s) ]]; then
+            git add all_nodes.txt
+            git commit -m "chore: auto-update unique nodes [$(date +'%Y-%m-%d %H:%M:%S')]"
+            git push
+          else
+            echo "No changes to commit."
+          fi
