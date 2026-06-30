@@ -12,7 +12,7 @@ BASE_URL = "https://t.me/s/freeVPNjd"
 MAX_WORKERS = 10
 TIMEOUT = 15
 
-# 排除列表：这些域名肯定不是订阅链接
+# 排除列表
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 
     'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com'
@@ -37,21 +37,52 @@ def fetch(url):
         return 0, ""
 
 # =========================
+# 内容校验函数
+# =========================
+def is_valid_sub_content(content):
+    """
+    判断返回内容是否为有效的订阅数据
+    """
+    content = content.strip()
+    if not content:
+        return False
+    
+    # 检查是否为 Clash 配置 (YAML)
+    if "proxies:" in content or "proxy-groups:" in content:
+        return True
+
+    # 尝试检查 Base64
+    try:
+        # 补全 padding 以防解码失败
+        padding = (4 - len(content) % 4) % 4
+        decoded = base64.b64decode(content + "=" * padding, validate=True).decode('utf-8', errors='ignore')
+        if any(scheme in decoded for scheme in ['vmess://', 'ss://', 'vless://', 'trojan://', 'ssr://']):
+            return True
+    except:
+        pass
+    
+    # 检查是否为普通的节点列表
+    if any(content.startswith(scheme) for scheme in ['vmess://', 'ss://', 'vless://', 'trojan://', 'ssr://']):
+        return True
+
+    return False
+
+# =========================
 # 提取并清理订阅链接
 # =========================
 def extract_links(html):
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text()
 
-    # 正则优化：匹配 http/https 开头，直到遇到中文、空格、引号、尖括号等
+    # 匹配 http/https 开头，直到遇到中文、空格、引号、尖括号等
     urls = re.findall(r'https?://[^\s\u4e00-\u9fa5"\'<>]+', text)
 
     subs = []
     for u in urls:
-        # 1. 二次清理：去掉链接末尾可能存在的标点或特殊字符
+        # 去掉链接末尾可能存在的标点或特殊字符
         clean_url = re.sub(r'[^\w/:.-]+$', '', u)
         
-        # 2. 检查黑名单
+        # 检查黑名单
         if any(domain in clean_url for domain in BLACKLIST_DOMAINS):
             continue
             
@@ -64,9 +95,9 @@ def extract_links(html):
 # =========================
 def process(url):
     code, content = fetch(url)
-    if code != 200:
-        return None
-    return url
+    if code == 200 and is_valid_sub_content(content):
+        return url
+    return None
 
 # =========================
 # 主流程
@@ -80,7 +111,7 @@ def main():
 
     print("[2] 提取并清洗订阅链接...")
     subs = extract_links(html)
-    print(f"[3] 发现清洗后的订阅: {len(subs)}")
+    print(f"[3] 发现订阅: {len(subs)}")
 
     if not subs:
         print("❌ 没有订阅链接")
