@@ -149,6 +149,7 @@ def extract_nodes():
         "raw.githubusercontent.com", 
         "upld.zone.id", 
         "rs6.r6r6.xyz",
+        "sub.zlwl.org",
         "fs.v2rayse.com", 
         "sub.irys.dpdns.org", 
         "vip.putata.dpdns.org", 
