@@ -15,6 +15,10 @@ PROTOCOLS = [
 # requests session
 # ----------------------------
 session = requests.Session()
+# 增强 User-Agent 以模拟真实访问，提高抓取成功率
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 retry = Retry(total=2, backoff_factor=0.3,
               status_forcelist=[500, 502, 503, 504])
 session.mount("http://", HTTPAdapter(max_retries=retry))
@@ -73,56 +77,58 @@ def parse_to_uri(node: str):
                 "net": "tcp",
                 "tls": "tls" if j.get("tls") == "tls" else ""
             }
-            return "vmess://" + base64.b64encode(json.dumps(cfg).encode()).decode()
+            uri = "vmess://" + base64.b64encode(json.dumps(cfg).encode()).decode()
+            name = cfg["ps"]
+        
+        else:
+            u = urlparse(node)
+            proto = u.scheme.lower()
+            q = parse_qs(u.query)
+            name = unquote(u.fragment) if u.fragment else proto
 
-        u = urlparse(node)
-        proto = u.scheme.lower()
-        q = parse_qs(u.query)
-
-        name = unquote(u.fragment) if u.fragment else proto
-
-        # vless
-        if proto == "vless":
-            uri = f"vless://{u.username}@{u.hostname}:{u.port or 443}"
-            params = []
-            if q.get("security"):
-                params.append(f"security={q['security'][0]}")
-            if q.get("sni"):
-                params.append(f"sni={q['sni'][0]}")
-            if q.get("flow"):
-                params.append(f"flow={q['flow'][0]}")
-            if params:
-                uri += "?" + "&".join(params)
-            return uri + f"#{name}"
-
-        # trojan
-        if proto == "trojan":
-            uri = f"trojan://{u.username}@{u.hostname}:{u.port or 443}"
-            if "sni" in q:
-                uri += f"?sni={q['sni'][0]}"
-            return uri + f"#{name}"
-
-        # ss
-        if proto == "ss":
-            if "@" in u.netloc:
-                cipher, password = u.username, u.password
-            else:
-                decoded = b64_decode(u.username)
-                if ":" in decoded:
-                    cipher, password = decoded.split(":", 1)
-                else:
+            # vless - 增加 Reality 过滤
+            if proto == "vless":
+                if "reality" not in str(q.get("security", "")).lower():
                     return None
+                uri = f"vless://{u.username}@{u.hostname}:{u.port or 443}"
+                params = []
+                if q.get("security"): params.append(f"security={q['security'][0]}")
+                if q.get("sni"): params.append(f"sni={q['sni'][0]}")
+                if q.get("flow"): params.append(f"flow={q['flow'][0]}")
+                if params: uri += "?" + "&".join(params)
+            
+            # trojan
+            elif proto == "trojan":
+                uri = f"trojan://{u.username}@{u.hostname}:{u.port or 443}"
+                if "sni" in q: uri += f"?sni={q['sni'][0]}"
+            
+            # ss
+            elif proto == "ss":
+                if "@" in u.netloc:
+                    cipher, password = u.username, u.password
+                else:
+                    decoded = b64_decode(u.username)
+                    if ":" in decoded: cipher, password = decoded.split(":", 1)
+                    else: return None
+                raw = f"{cipher}:{password}"
+                enc = base64.b64encode(raw.encode()).decode()
+                uri = f"ss://{enc}@{u.hostname}:{u.port}"
+            
+            # hysteria2
+            elif proto in ["hysteria2", "hy2"]:
+                uri = f"hysteria2://{u.username}@{u.hostname}:{u.port}"
+            
+            # http/socks5
+            elif proto in ["http", "socks5"]:
+                uri = f"{proto}://{u.netloc}"
+            
+            else:
+                return node.strip()
 
-            raw = f"{cipher}:{password}"
-            enc = base64.b64encode(raw.encode()).decode()
-            return f"ss://{enc}@{u.hostname}:{u.port}#{name}"
-
-        # hysteria2
-        if proto in ["hysteria2", "hy2"]:
-            return f"hysteria2://{u.username}@{u.hostname}:{u.port}#{name}"
-
-        # fallback
-        return node.strip()
+        # 统一强制重命名为 Country_MD5 格式
+        md5_part = hashlib.md5(uri.encode()).hexdigest()[:8]
+        new_name = f"CN_{md5_part}"
+        return f"{uri.split('#')[0]}#{new_name}"
 
     except:
         return None
@@ -167,9 +173,6 @@ def extract_nodes():
         seen.add(fp)
         results.append(uri)
 
-    # ----------------------------
-    # ONLY OUTPUT FILE
-    # ----------------------------
     with open("all_nodes.txt", "w", encoding="utf-8") as f:
         for r in results:
             f.write(r + "\n")
