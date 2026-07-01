@@ -41,7 +41,7 @@ jobs:
           git pull --rebase origin main
           git stash pop || echo "No stash to pop"
           if [[ -n $(git status -s) ]]; then
-            git add all_nodes.txt sub_base64.txt
+            git add all_nodes.txt sub_stats.csv 
             git commit -m "chore: auto-update unique nodes [$(date +'%Y-%m-%d %H:%M:%S')]"
             git push
           else
