@@ -15,7 +15,6 @@ PROTOCOLS = [
 # requests session
 # ----------------------------
 session = requests.Session()
-# 增强 User-Agent 以模拟真实访问，提高抓取成功率
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 })
@@ -65,20 +64,18 @@ def parse_to_uri(node: str):
         # vmess
         if node.startswith("vmess://"):
             raw = b64_decode(node[8:])
-            j = json.loads(raw)
-
-            cfg = {
-                "v": "2",
-                "ps": j.get("ps", "vmess"),
-                "add": j.get("add"),
-                "port": str(j.get("port")),
-                "id": j.get("id"),
-                "aid": str(j.get("aid", 0)),
-                "net": "tcp",
-                "tls": "tls" if j.get("tls") == "tls" else ""
-            }
-            uri = "vmess://" + base64.b64encode(json.dumps(cfg).encode()).decode()
-            name = cfg["ps"]
+            try:
+                j = json.loads(raw)
+                cfg = {
+                    "v": "2", "ps": j.get("ps", "vmess"), "add": j.get("add"),
+                    "port": str(j.get("port")), "id": j.get("id"),
+                    "aid": str(j.get("aid", 0)), "net": "tcp",
+                    "tls": "tls" if j.get("tls") == "tls" else ""
+                }
+                uri = "vmess://" + base64.b64encode(json.dumps(cfg).encode()).decode()
+                name = cfg["ps"]
+            except:
+                return node.strip()
         
         else:
             u = urlparse(node)
@@ -86,10 +83,8 @@ def parse_to_uri(node: str):
             q = parse_qs(u.query)
             name = unquote(u.fragment) if u.fragment else proto
 
-            # vless - 增加 Reality 过滤
+            # vless - 修正：不再强制剔除非 Reality 节点
             if proto == "vless":
-                if "reality" not in str(q.get("security", "")).lower():
-                    return None
                 uri = f"vless://{u.username}@{u.hostname}:{u.port or 443}"
                 params = []
                 if q.get("security"): params.append(f"security={q['security'][0]}")
@@ -109,7 +104,7 @@ def parse_to_uri(node: str):
                 else:
                     decoded = b64_decode(u.username)
                     if ":" in decoded: cipher, password = decoded.split(":", 1)
-                    else: return None
+                    else: return node.strip()
                 raw = f"{cipher}:{password}"
                 enc = base64.b64encode(raw.encode()).decode()
                 uri = f"ss://{enc}@{u.hostname}:{u.port}"
@@ -118,20 +113,20 @@ def parse_to_uri(node: str):
             elif proto in ["hysteria2", "hy2"]:
                 uri = f"hysteria2://{u.username}@{u.hostname}:{u.port}"
             
-            # http/socks5
+            # http/socks5 (包含 HTTP 节点)
             elif proto in ["http", "socks5"]:
                 uri = f"{proto}://{u.netloc}"
             
             else:
                 return node.strip()
 
-        # 统一强制重命名为 Country_MD5 格式
+        # 强制使用 Country_MD5 格式
         md5_part = hashlib.md5(uri.encode()).hexdigest()[:8]
         new_name = f"CN_{md5_part}"
         return f"{uri.split('#')[0]}#{new_name}"
 
     except:
-        return None
+        return node.strip()
 
 
 # ----------------------------
@@ -149,7 +144,6 @@ def extract_nodes():
         return
 
     urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
-
     raw_nodes = set()
 
     with ThreadPoolExecutor(max_workers=25) as ex:
@@ -163,13 +157,9 @@ def extract_nodes():
 
     for n in raw_nodes:
         uri = parse_to_uri(n)
-        if not uri:
-            continue
-
+        if not uri: continue
         fp = fingerprint(uri)
-        if fp in seen:
-            continue
-
+        if fp in seen: continue
         seen.add(fp)
         results.append(uri)
 
