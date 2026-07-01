@@ -38,10 +38,6 @@ https://fnet00.vijra.ir/sub?b64=true&limit=100
 https://free.moecats.tk/api/v1/client/subscribe?token=68cd2dfeab04863278051998f49c392f
 https://ircf.space/linkbox.php
 https://ircf.space/linkbox.php@ircfspace
-https://libredns.gr/mobileconfig/LibreDNS-DoH.mobileconfig
-https://libredns.gr/mobileconfig/LibreDNS-DoT.mobileconfig
-https://libredns.gr/mobileconfig/LibreDNS-noads-DoH.mobileconfig
-https://libredns.gr/mobileconfig/LibreDNS-noads-DoT.mobileconfig
 https://luonan.tech/s/MDsw5hXl?target=v2rayn
 https://marz.panel1.cloud:8000/sub/cGFuZWwzN181NSwxNzY5ODgyMjYyx7I_GsQ147
 https://nameless255.github.io/shadow/v2ray.html
