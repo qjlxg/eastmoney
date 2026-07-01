@@ -23,7 +23,7 @@ SUBSCRIPTION_KEYWORDS = [
 
 # 屏蔽非订阅类域名 (包含 AI、社交、音乐、伊朗本地服务等)
 BLACKLIST_DOMAINS = [
-    't.me', 'github.com', 'google.com', 'youtube.com', 'youtu.be',
+    't.me', 'github.com', 'google.com', 'youtube.com', 'youtu.be','chibaba.ggff.net','Amirinventor2010.bio.link','apkdl.net','paste.gg',
     'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com','githubusercontent',
     'www.xrayvip.com', 'link.onesy.link', 'wikipedia.org', 'reddit.com',
     'apple.com', 'microsoft.com', 'purl.org', 'w3.org', 'x.com',
