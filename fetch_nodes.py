@@ -10,7 +10,8 @@ CHANNELS_FILE = "channels.txt"
 BASE_PREFIX = "https://t.me/s/" # 自动补全前缀
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 
-    'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com'
+    'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com',
+    'www.xrayvip.com', 'link.onesy.link'
 ]
 
 session = requests.Session()
