@@ -59,7 +59,6 @@ def parse_clash_proxies(content):
                 if ptype == "ss":
                     cipher = p.get("cipher", "")
                     pwd = p.get("password", "")
-                    # 采用 urlsafe 编码更符合 SS 链接规范
                     auth = base64.urlsafe_b64encode(f"{cipher}:{pwd}".encode()).decode().replace("=", "")
                     extracted_uris.append(f"ss://{auth}@{server}:{port}#{name}")
 
@@ -104,7 +103,7 @@ def parse_clash_proxies(content):
                     elif vj["net"] == "grpc" and p.get("grpc-opts"):
                         vpath = p["grpc-opts"].get("service-name", "")
                         vj["path"] = vpath
-                        vj["serviceName"] = vpath # 增强 gRPC 兼容性
+                        vj["serviceName"] = vpath
                     
                     v_str = base64.b64encode(json.dumps(vj, separators=(',', ':')).encode()).decode()
                     extracted_uris.append(f"vmess://{v_str}")
@@ -112,7 +111,6 @@ def parse_clash_proxies(content):
                 elif ptype == "http":
                     user = p.get("username", "")
                     pwd = p.get("password", "")
-                    # 修正：auth 已经带了 @，后面不需要再重复 @
                     auth = f"{user}:{pwd}@" if user else ""
                     tls = "true" if p.get("tls") else "false"
                     extracted_uris.append(f"http://{auth}{server}:{port}?tls={tls}#{name}")
@@ -133,18 +131,15 @@ def get_nodes_from_url(url):
         r = session.get(url, timeout=(5, 15))
         if r.status_code != 200:
             return ""
-        # 核心：自动识别编码，防止备注乱码
         r.encoding = r.apparent_encoding
         content = r.text.strip()
         
-        # 1. 尝试识别并解码 Base64 (增强版判定：允许内容包含空行)
         clean_content = "".join(content.split())
         if re.fullmatch(r"[A-Za-z0-9+/=\s_-]+", clean_content):
             decoded = b64_decode(clean_content)
             if any(p + "://" in decoded.lower() for p in PROTOCOLS):
                 return decoded
         
-        # 2. 尝试 Clash YAML 解析
         if "proxies" in content:
             clash_uris = parse_clash_proxies(content)
             if clash_uris:
@@ -182,7 +177,6 @@ def parse_to_uri(node: str):
             
         sorted_items = []
         for k in sorted(q.keys()):
-            # 核心：对连接类参数进行小写对齐，大幅提高去重率
             vals = [v.strip().lower() if k.lower() in ["tls", "security", "sni", "fp", "net", "type"] else v.strip() for v in q[k]]
             sorted_items.append((k, sorted(vals)))
         sorted_query = urlencode(sorted_items, doseq=True)
@@ -221,7 +215,6 @@ def fingerprint(uri):
             return hashlib.md5(json.dumps(core, sort_keys=True).encode()).hexdigest()
         else:
             u = urlparse(uri)
-            # 基础特征：协议 + 用户 + 地址 + 端口 + 路径
             identity = [u.scheme.lower(), (u.username or "").lower(), (u.password or ""), (u.hostname or "").lower(), str(u.port or ""), u.path]
             q = parse_qs(u.query)
             relevant_params = []
@@ -229,7 +222,6 @@ def fingerprint(uri):
             for k in sorted(q.keys()):
                 k_lower = k.lower()
                 if k_lower in IGNORE_KEYS: continue
-                # 对关键参数进行布尔对齐
                 vals = []
                 for v in q[k]:
                     v_c = v.strip().lower()
@@ -263,14 +255,13 @@ def extract_nodes():
     print(f"开始处理 {len(urls)} 个订阅源...")
     raw_nodes = set()
 
-    # 使用 ThreadPoolExecutor 并发处理抓取
     with ThreadPoolExecutor(max_workers=25) as ex:
         for content in ex.map(get_nodes_from_url, urls):
             if content:
-                # 统一分割处理
                 chunks = re.split(r'[\s\n\r]+', content)
                 for c in chunks:
                     c = c.strip()
+                    # 核心协议过滤逻辑
                     if any(c.startswith(p + "://") for p in PROTOCOLS):
                         raw_nodes.add(c)
 
@@ -280,6 +271,9 @@ def extract_nodes():
     for n in raw_nodes:
         uri = parse_to_uri(n)
         if not uri: continue
+        # 再次确保仅添加在 PROTOCOLS 列表内的协议
+        if not any(uri.startswith(p + "://") for p in PROTOCOLS): continue
+        
         fp = fingerprint(uri)
         if fp in seen_fps: continue
         seen_fps.add(fp)
