@@ -144,7 +144,12 @@ def extract_nodes():
     if not os.path.exists("valid_subs.txt"):
         return
 
-    urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
+    # 排除列表 (包含 MatinGhanbari 路径的链接)
+    exclude_keywords = ["MatinGhanbari/v2ray-configs"]
+    
+    all_urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
+    urls = [url for url in all_urls if not any(k in url for k in exclude_keywords)]
+    
     raw_nodes = set()
     stats = []
 
