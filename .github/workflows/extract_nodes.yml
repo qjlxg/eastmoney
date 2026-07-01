@@ -14,7 +14,7 @@ jobs:
     permissions:
       contents: write
     env:
-      TZ: Asia/Shanghai # 设置时区为北京时间
+      TZ: Asia/Shanghai
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,13 +31,13 @@ jobs:
           
       - name: Run Extraction Script
         run: |
-          date
           python extract_nodes.py
 
       - name: Commit and Push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
           if [[ -n $(git status -s) ]]; then
             git add all_nodes.txt
             git commit -m "chore: auto-update unique nodes [$(date +'%Y-%m-%d %H:%M:%S')]"
