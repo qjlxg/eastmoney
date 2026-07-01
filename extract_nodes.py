@@ -11,14 +11,6 @@ PROTOCOLS = [
     "vless", "hy2", "hysteria2", "anytls", "hysteria", "tuic"
 ]
 
-# 简单的国家代码转国旗/中文名映射
-COUNTRY_MAP = {
-    "US": ("🇺🇸", "美国"), "CN": ("🇨🇳", "中国"), "HK": ("🇭🇰", "香港"),
-    "TW": ("🇹🇼", "台湾"), "JP": ("🇯🇵", "日本"), "SG": ("🇸🇬", "新加坡"),
-    "KR": ("🇰🇷", "韩国"), "GB": ("🇬🇧", "英国"), "DE": ("🇩🇪", "德国"),
-    "FR": ("🇫🇷", "法国"), "CA": ("🇨🇦", "加拿大"), "AU": ("🇦🇺", "澳大利亚")
-}
-
 # ----------------------------
 # GeoIP 初始化
 # ----------------------------
@@ -29,11 +21,10 @@ def get_country_info(ip):
     try:
         if not geo_reader: return "🌍未知"
         response = geo_reader.country(ip)
-        code = response.country.iso_code
-        flag, name = COUNTRY_MAP.get(code, ("🌐", response.country.name or "Unknown"))
-        return f"{flag}{name}"
+        name = response.country.name or "Unknown"
+        return f"{name}"
     except:
-        return "🌐未知"
+        return "Unknown"
 
 # ----------------------------
 # requests session
