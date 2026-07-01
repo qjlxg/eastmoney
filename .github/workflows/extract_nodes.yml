@@ -1,0 +1,61 @@
+name: Extract Nodes
+
+on:
+  push:
+    paths:
+      - 'valid_subs.txt'
+      - '.github/workflows/extract_nodes.yml'
+      - 'extract_nodes.py'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyyaml geoip2
+
+      - name: Cache GeoLite2 Database
+        id: cache-assets
+        uses: actions/cache@v4
+        with:
+          path: GeoLite2-Country.mmdb
+          key: geoip-db-v1
+
+      - name: Update GeoLite2 Database
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: |
+          curl -L -f -o GeoLite2-Country.mmdb "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb" || echo "⚠️ GeoLite2 下载失败"
+
+      - name: Run Extraction Script
+        run: |
+          python extract_nodes.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git stash
+          git pull --rebase origin main
+          git stash pop || echo "No stash to pop"
+          if [[ -n $(git status -s) ]]; then
+            git add all_nodes.txt sub_stats.csv GeoLite2-Country.mmdb
+            git commit -m "chore: auto-update unique nodes [$(date +'%Y-%m-%d %H:%M:%S')]"
+            git push
+          else
+            echo "No changes to commit."
+          fi
