@@ -146,7 +146,7 @@ def extract_nodes():
 
     # 排除所有 github.com 来源
     all_urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
-    urls = [url for url in all_urls if "github.com" not in url]
+    urls = [url for url in all_urls if "raw.githubusercontent.com" not in url]
     
     raw_nodes = set()
     stats = []
