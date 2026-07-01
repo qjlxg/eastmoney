@@ -16,7 +16,7 @@ PROTOCOLS = [
 # ----------------------------
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0"
 })
 retry = Retry(total=2, backoff_factor=0.3,
               status_forcelist=[500, 502, 503, 504])
@@ -144,9 +144,17 @@ def extract_nodes():
     if not os.path.exists("valid_subs.txt"):
         return
 
-    # 排除所有 github.com 来源
+    # 排除指定域名
+    exclude_domains = [
+        "raw.githubusercontent.com", 
+        "upld.zone.id", 
+        "sub.irys.dpdns.org", 
+        "vip.putata.dpdns.org", 
+        "s3.v2rayse.com"
+    ]
+    
     all_urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
-    urls = [url for url in all_urls if "raw.githubusercontent.com" not in url]
+    urls = [url for url in all_urls if not any(d in url for d in exclude_domains)]
     
     raw_nodes = set()
     stats = []
