@@ -33,11 +33,11 @@ def get_ip_from_host(host):
 
 def get_country_info(host):
     if host in geo_cache: return geo_cache[host]
-    
+
     ip = get_ip_from_host(host)
     if not ip or not geo_reader:
         return "Unknown"
-    
+
     try:
         response = geo_reader.country(ip)
         country = response.country.names.get('zh-CN', response.country.name) or "Unknown"
@@ -77,7 +77,7 @@ def get_nodes_from_url(url):
         r = session.get(url.strip(), timeout=(5, 15))
         if r.status_code != 200: return url, ""
         content = r.text.strip()
-        
+
         # 尝试解码订阅内容
         decoded = b64_decode(content)
         # 如果解码后包含已知协议，说明是Base64订阅
@@ -94,22 +94,27 @@ def parse_to_uri(node: str):
     try:
         node = node.strip()
         if not node or "://" not in node: return None
-        
-        # 处理附带在末尾的备注 (去除旧备注)
-        clean_node = node.split('#')[0]
+
+        # 获取原始备注 (fragment)
+        if '#' in node:
+            parts = node.split('#', 1)
+            clean_node = parts[0]
+            original_tag = unquote(parts[1])
+        else:
+            clean_node = node
+            original_tag = "Node"
+
         u = urlparse(clean_node)
         hostname = u.hostname
 
         if not hostname:
             return node
 
-        # 获取地理位置并生成新备注
+        # 获取地理位置并保留原始名称
         country = get_country_info(hostname)
-        node_hash = hashlib.md5(node.encode()).hexdigest()[:6]
-        new_tag = f"{country}_{node_hash}"
+        new_tag = f"{country}-{original_tag}"
 
-        # 重新组合 URI，确保保留所有原始参数 (Query)
-        # 移除旧的 fragment，添加新的备注
+        # 重新组合 URI
         new_uri = urlunparse((
             u.scheme, u.netloc, u.path, u.params, u.query, new_tag
         ))
@@ -130,7 +135,7 @@ def extract_nodes():
     exclude_domains = ["githubusercontent.com", "s3.v2rayse.com"]
     all_urls = [i.strip() for i in open(input_file, encoding="utf-8") if i.strip() and not i.startswith("#")]
     urls = [url for url in all_urls if not any(d in url for d in exclude_domains)]
-    
+
     print(f"🚀 开始抓取 {len(urls)} 个订阅源...")
 
     raw_nodes = set()
@@ -164,10 +169,10 @@ def extract_nodes():
     for n in raw_nodes:
         processed_uri = parse_to_uri(n)
         if not processed_uri: continue
-        
+
         # 提取核心部分作为指纹（去除备注部分进行去重）
         fingerprint = hashlib.md5(processed_uri.split('#')[0].encode()).hexdigest()
-        
+
         if fingerprint not in seen_fingerprints:
             seen_fingerprints.add(fingerprint)
             final_nodes.append(processed_uri)
