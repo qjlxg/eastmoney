@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from concurrent.futures import ThreadPoolExecutor
 
 # =========================
 # 配置
@@ -24,7 +25,7 @@ SUBSCRIPTION_KEYWORDS = [
 # 屏蔽非订阅类域名 (包含 AI、社交、音乐、伊朗本地服务等)
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 'youtu.be','chibaba.ggff.net','Amirinventor2010.bio.link','apkdl.net','paste.gg',
-    'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com','githubusercontent','raw.githubusercontent.com',
+    'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com','githubusercontent','raw.githubusercontent.com','libredns.gr',
     'www.xrayvip.com', 'link.onesy.link', 'wikipedia.org', 'reddit.com',
     'apple.com', 'microsoft.com', 'purl.org', 'w3.org', 'x.com',
     'chatgpt.com', 'claude.ai', 'deepseek.com', 'openai.com', 'perplexity.ai',
@@ -148,6 +149,47 @@ def get_smallest_msg_id(html):
                 continue
     return min(ids) if ids else None
 
+def process_channel(name):
+    """单个频道的抓取逻辑"""
+    name = name.lstrip('@')
+    print(f"正在抓取频道: {name}")
+    
+    channel_subs = set()
+    current_before = ""
+    last_before_id = None # 用于防止死循环
+
+    for page in range(MAX_PAGES_PER_CHANNEL):
+        full_url = f"{BASE_PREFIX}{name}{current_before}"
+        try:
+            response = session.get(full_url, timeout=15)
+            if response.status_code == 200:
+                subs = extract_links_from_html(response.text)
+                channel_subs.update(subs)
+                
+                smallest_id = get_smallest_msg_id(response.text)
+                
+                # 校验：翻页逻辑
+                if smallest_id and smallest_id != last_before_id and smallest_id > 1:
+                    print(f"  -> {name} 第 {page+1} 页: 发现 {len(subs)} 个符合特征的链接 (before={smallest_id})")
+                    current_before = f"?before={smallest_id}"
+                    last_before_id = smallest_id
+                else:
+                    print(f"  -> {name} 第 {page+1} 页: 结束翻页")
+                    break
+                    
+                if not subs and page > 1: # 连续多页没东西则停止
+                    break
+            elif response.status_code == 404:
+                print(f"  -> {name} 频道不存在 (404)")
+                break
+            else:
+                print(f"  -> {name} 获取失败 (状态码: {response.status_code})")
+                break
+        except Exception as e:
+            print(f"  -> {name} 网络错误: {e}")
+            break
+    return channel_subs
+
 def main():
     if not os.path.exists(CHANNELS_FILE):
         print(f"❌ 配置文件 {CHANNELS_FILE} 不存在")
@@ -162,43 +204,11 @@ def main():
 
     all_found_subs = set()
     
-    for name in channel_names:
-        name = name.lstrip('@')
-        print(f"正在抓取频道: {name}")
-        
-        current_before = ""
-        last_before_id = None # 用于防止死循环
-
-        for page in range(MAX_PAGES_PER_CHANNEL):
-            full_url = f"{BASE_PREFIX}{name}{current_before}"
-            try:
-                response = session.get(full_url, timeout=15)
-                if response.status_code == 200:
-                    subs = extract_links_from_html(response.text)
-                    all_found_subs.update(subs)
-                    
-                    smallest_id = get_smallest_msg_id(response.text)
-                    
-                    # 校验：翻页逻辑
-                    if smallest_id and smallest_id != last_before_id and smallest_id > 1:
-                        print(f"  -> 第 {page+1} 页: 发现 {len(subs)} 个符合特征的链接 (before={smallest_id})")
-                        current_before = f"?before={smallest_id}"
-                        last_before_id = smallest_id
-                    else:
-                        print(f"  -> 第 {page+1} 页: 结束翻页")
-                        break
-                        
-                    if not subs and page > 1: # 连续多页没东西则停止
-                        break
-                elif response.status_code == 404:
-                    print(f"  -> 频道不存在 (404)")
-                    break
-                else:
-                    print(f"  -> 获取失败 (状态码: {response.status_code})")
-                    break
-            except Exception as e:
-                print(f"  -> 网络错误: {e}")
-                break
+    # 使用线程池并行抓取
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = executor.map(process_channel, channel_names)
+        for subs in results:
+            all_found_subs.update(subs)
 
     print(f"\n[汇总] 共提取出 {len(all_found_subs)} 个唯一订阅链接，正在保存...")
 
