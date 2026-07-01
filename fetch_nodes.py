@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 # =========================
 CHANNELS_FILE = "channels.txt"
 BASE_PREFIX = "https://t.me/s/" # 自动补全前缀
-MAX_PAGES_PER_CHANNEL = 586       # 每个频道向后翻页的数量
+MAX_PAGES_PER_CHANNEL = 8       # 每个频道向后翻页的数量
 
 # 屏蔽非订阅类域名 (大幅增强，包含 AI、社交、音乐、伊朗本地服务等)
 BLACKLIST_DOMAINS = [
