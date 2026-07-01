@@ -24,7 +24,7 @@ SUBSCRIPTION_KEYWORDS = [
 # 屏蔽非订阅类域名 (包含 AI、社交、音乐、伊朗本地服务等)
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 'youtu.be',
-    'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com',
+    'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com','githubusercontent',
     'www.xrayvip.com', 'link.onesy.link', 'wikipedia.org', 'reddit.com',
     'apple.com', 'microsoft.com', 'purl.org', 'w3.org', 'x.com',
     'chatgpt.com', 'claude.ai', 'deepseek.com', 'openai.com', 'perplexity.ai',
