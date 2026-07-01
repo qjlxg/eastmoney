@@ -33,9 +33,7 @@ BLACKLIST_DOMAINS = [
     'aparat.com', 'rubika.ir', 'uupload.ir', 'uploadboy.com', 'uplod.ir',
     'post.ir', 'cafebazaar.ir', 'snapp.ir', 'arvancloud.ir', 'bertina.ir',
     'radiojavan.com', 'mega.nz', 'f-droid.org', 'visualstudio.com', 'nextjs.org',
-    'kubernetes.io', 'helm.sh', 'cloudflarestatus.com', 'reuters.com',
-    'workers.dev', 'github.io', 'sublink.works', 'jiux001.cc', 'jjzsub01.com', 
-    'vijra.ir', 'pasted.ir', 'punkpaste.ir', 'zshabai.cc'
+    'kubernetes.io', 'helm.sh', 'cloudflarestatus.com', 'reuters.com'
 ]
 
 # 屏蔽常见静态资源后缀 (注意：.yaml 和 .yml 已从中移除)
@@ -93,8 +91,11 @@ def extract_links_from_html(html):
                 found_raw_urls.append(decoded)
 
     clean_subs = []
+    # 预处理黑名单为小写以提高匹配效率
+    lower_blacklist = [d.lower() for d in BLACKLIST_DOMAINS]
+
     for u in found_raw_urls:
-        # 增强清理：递归清理末尾干扰字符及非 ASCII 文本（如波斯语后缀）
+        # 增强清理：递归清理末尾干扰字符及非 ASCII 文本
         u = re.split(r'[^\x00-\x7F]+', u)[0]
         u = u.strip().rstrip(').,;!]>》】"\'#')
         
@@ -111,8 +112,17 @@ def extract_links_from_html(html):
             path = parsed.path.lower()
             u_lower = u.lower()
 
-            # 1. 域名黑名单过滤 (增强：使用包含判断，拦截所有子域名)
-            if any(blk in domain for blk in BLACKLIST_DOMAINS):
+            # --- 核心过滤逻辑增强 ---
+            
+            # 1. 域名和全路径黑名单过滤
+            # 检查 domain 是否在黑名单，或者 URL 字符串中是否包含黑名单关键词
+            # 这能解决嵌套链接如 down.nigx.cn/raw.githubusercontent.com 的问题
+            is_blacklisted = False
+            for blk in lower_blacklist:
+                if blk in u_lower:
+                    is_blacklisted = True
+                    break
+            if is_blacklisted:
                 continue
             
             # 2. IP 黑名单过滤
@@ -124,6 +134,7 @@ def extract_links_from_html(html):
                 continue
 
             # 4. 订阅特征关键字正向过滤 (过滤掉不包含特征词的杂乱链接)
+            # 特别注意：如果黑名单检查通过，才进行关键字检查
             if not any(kw in u_lower for kw in SUBSCRIPTION_KEYWORDS):
                 continue
 
