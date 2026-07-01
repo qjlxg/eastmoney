@@ -36,15 +36,17 @@ def get_country_info(host):
 
     ip = get_ip_from_host(host)
     if not ip or not geo_reader:
-        return "Unknown"
+        return None
 
     try:
         response = geo_reader.country(ip)
-        country = response.country.names.get('zh-CN', response.country.name) or "Unknown"
-        geo_cache[host] = country
-        return country
+        country = response.country.names.get('zh-CN', response.country.name)
+        if country:
+            geo_cache[host] = country
+            return country
+        return None
     except:
-        return "Unknown"
+        return None
 
 # ----------------------------
 # 增强型 Base64 解码
@@ -110,9 +112,12 @@ def parse_to_uri(node: str):
         if not hostname:
             return node
 
-        # 获取地理位置并保留原始名称
+        # 获取地理位置，如果识别到则添加前缀，否则保持原样
         country = get_country_info(hostname)
-        new_tag = f"{country}-{original_tag}"
+        if country:
+            new_tag = f"{country}-{original_tag}"
+        else:
+            new_tag = original_tag
 
         # 重新组合 URI
         new_uri = urlunparse((
