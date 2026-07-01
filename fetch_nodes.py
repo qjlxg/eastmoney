@@ -12,9 +12,16 @@ from urllib3.util.retry import Retry
 # =========================
 CHANNELS_FILE = "channels.txt"
 BASE_PREFIX = "https://t.me/s/" # 自动补全前缀
-MAX_PAGES_PER_CHANNEL = 8       # 每个频道向后翻页的数量
+MAX_PAGES_PER_CHANNEL = 10      # 每个频道向后翻页的数量
 
-# 屏蔽非订阅类域名 (大幅增强，包含 AI、社交、音乐、伊朗本地服务等)
+# 订阅特征关键字 (URL 包含以下任意词汇将被优先视为订阅链接)
+SUBSCRIPTION_KEYWORDS = [
+    'sub', 'subscribe', 'token', 'clash', 'v2ray', 'singbox', 
+    'base64', 'raw', 'link', 'config', 'proxypool', 'node', 
+    'api/v1', 'yaml', 'yml', 'json', 'txt'
+]
+
+# 屏蔽非订阅类域名 (包含 AI、社交、音乐、伊朗本地服务等)
 BLACKLIST_DOMAINS = [
     't.me', 'github.com', 'google.com', 'youtube.com', 'youtu.be',
     'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com',
@@ -28,7 +35,7 @@ BLACKLIST_DOMAINS = [
     'kubernetes.io', 'helm.sh', 'cloudflarestatus.com', 'reuters.com'
 ]
 
-# 屏蔽常见静态资源后缀
+# 屏蔽常见静态资源后缀 (注意：.yaml 和 .yml 已从中移除)
 BLACKLIST_EXTENSIONS = [
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico',
     '.mp4', '.mp3', '.m4a', '.pdf', '.exe', '.dmg', '.apk', 
@@ -84,8 +91,8 @@ def extract_links_from_html(html):
 
     clean_subs = []
     for u in found_raw_urls:
-        # 增强清理：递归清理末尾的干扰字符，包括常见的非 ASCII 字符（解决你结果中出现的 #ساب 等干扰）
-        u = re.split(r'[^\x00-\x7F]+', u)[0] # 遇到非 ASCII 字符（如波斯语、表情符号）直接截断
+        # 增强清理：递归清理末尾干扰字符及非 ASCII 文本（如波斯语后缀）
+        u = re.split(r'[^\x00-\x7F]+', u)[0]
         u = u.strip().rstrip(').,;!]>》】"\'#')
         
         try:
@@ -93,12 +100,13 @@ def extract_links_from_html(html):
             if not parsed.scheme or not parsed.netloc:
                 continue
             
-            # 过滤非 http/https 协议 (如 tg://)
+            # 过滤非 http/https 协议
             if parsed.scheme not in ['http', 'https']:
                 continue
 
             domain = parsed.netloc.lower()
             path = parsed.path.lower()
+            u_lower = u.lower()
 
             # 1. 域名黑名单过滤
             if any(domain == blk or domain.endswith("." + blk) for blk in BLACKLIST_DOMAINS):
@@ -110,6 +118,10 @@ def extract_links_from_html(html):
 
             # 3. 后缀名黑名单过滤
             if any(path.endswith(ext) for ext in BLACKLIST_EXTENSIONS):
+                continue
+
+            # 4. 订阅特征关键字正向过滤 (过滤掉不包含特征词的杂乱链接)
+            if not any(kw in u_lower for kw in SUBSCRIPTION_KEYWORDS):
                 continue
 
             if len(u) < 15: 
@@ -167,16 +179,16 @@ def main():
                     
                     smallest_id = get_smallest_msg_id(response.text)
                     
-                    # 校验：如果有 ID、ID 没变过、且 ID 大于 1，则继续翻页
+                    # 校验：翻页逻辑
                     if smallest_id and smallest_id != last_before_id and smallest_id > 1:
-                        print(f"  -> 第 {page+1} 页: 发现 {len(subs)} 个线索 (before={smallest_id})")
+                        print(f"  -> 第 {page+1} 页: 发现 {len(subs)} 个符合特征的链接 (before={smallest_id})")
                         current_before = f"?before={smallest_id}"
                         last_before_id = smallest_id
                     else:
                         print(f"  -> 第 {page+1} 页: 结束翻页")
                         break
                         
-                    if not subs and page > 1: # 连续两页没东西则停止
+                    if not subs and page > 1: # 连续多页没东西则停止
                         break
                 elif response.status_code == 404:
                     print(f"  -> 频道不存在 (404)")
@@ -188,7 +200,7 @@ def main():
                 print(f"  -> 网络错误: {e}")
                 break
 
-    print(f"\n[汇总] 共提取出 {len(all_found_subs)} 个唯一链接，正在保存...")
+    print(f"\n[汇总] 共提取出 {len(all_found_subs)} 个唯一订阅链接，正在保存...")
 
     if all_found_subs:
         with open("valid_subs.txt", "w", encoding="utf-8") as f:
@@ -196,7 +208,7 @@ def main():
                 f.write(u + "\n")
         print("✅ 已同步所有链接到 valid_subs.txt")
     else:
-        print("❌ 未发现任何有效链接")
+        print("❌ 未发现任何有效订阅链接")
 
 if __name__ == "__main__":
     main()
