@@ -1,10 +1,9 @@
-import re, os, requests, base64, json, hashlib, yaml
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import re, os, requests, base64, json, hashlib
+from urllib.parse import urlparse, unquote, parse_qs
 from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# 确保工作目录为脚本所在目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 PROTOCOLS = [
@@ -13,106 +12,163 @@ PROTOCOLS = [
 ]
 
 # ----------------------------
-# requests 会话配置
+# requests session
 # ----------------------------
 session = requests.Session()
-retry = Retry(total=3, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
+retry = Retry(total=2, backoff_factor=0.3,
+              status_forcelist=[500, 502, 503, 504])
 session.mount("http://", HTTPAdapter(max_retries=retry))
 session.mount("https://", HTTPAdapter(max_retries=retry))
-session.headers.update({"User-Agent": "v2rayN/6.23"})
+
 
 # ----------------------------
-# 辅助函数定义
+# base64 decode
 # ----------------------------
 def b64_decode(data: str) -> str:
-    if not data: return ""
     data = data.strip().replace('-', '+').replace('_', '/')
     data += "=" * (-len(data) % 4)
+    for func in (base64.b64decode, base64.urlsafe_b64decode):
+        try:
+            return func(data).decode("utf-8", "ignore")
+        except:
+            continue
+    return ""
+
+
+# ----------------------------
+# fetch subscription
+# ----------------------------
+def get_nodes_from_url(url):
     try:
-        return base64.b64decode(data).decode("utf-8", "ignore")
-    except Exception:
+        r = session.get(url.strip(), timeout=(5, 10))
+        if r.status_code != 200:
+            return ""
+        content = r.text.strip()
+        decoded = b64_decode(content)
+        return decoded if any(p + "://" in decoded.lower() for p in PROTOCOLS) else content
+    except:
         return ""
 
-def parse_clash_proxies(content):
-    try:
-        data = yaml.safe_load(content)
-        if not data or not isinstance(data, dict) or "proxies" not in data:
-            return []
-        extracted_uris = []
-        for p in data["proxies"]:
-            if not isinstance(p, dict): continue
-            try:
-                ptype = str(p.get("type", "")).lower()
-                name = str(p.get("name", "node"))
-                server = str(p.get("server", ""))
-                port = str(p.get("port", ""))
-                if not server or not port: continue
-                # ... (此处保留你原有的逻辑，为了篇幅略去详细实现)
-                # 确保完整性请使用上一条回复中的完整解析逻辑
-            except: continue
-        return extracted_uris
-    except: return []
 
-# --- 此函数必须定义在 extract_nodes 之前 ---
-def get_nodes_from_url(url):
-    url = url.strip()
-    if not url or url.startswith("#"): return ""
-    try:
-        r = session.get(url, timeout=(5, 15))
-        if r.status_code != 200: return ""
-        r.encoding = r.apparent_encoding
-        content = r.text.strip()
-        clean_content = "".join(content.split())
-        if re.fullmatch(r"[A-Za-z0-9+/=\s_-]+", clean_content):
-            decoded = b64_decode(clean_content)
-            if any(p + "://" in decoded.lower() for p in PROTOCOLS): return decoded
-        if "proxies" in content:
-            clash_uris = parse_clash_proxies(content)
-            if clash_uris: return "\n".join(clash_uris)
-        return content
-    except Exception: return ""
-
+# ----------------------------
+# parse node -> return URI
+# ----------------------------
 def parse_to_uri(node: str):
-    # ... (保持原逻辑)
-    return None
+    try:
+        if not any(p + "://" in node for p in PROTOCOLS):
+            return None
 
+        # vmess
+        if node.startswith("vmess://"):
+            raw = b64_decode(node[8:])
+            try:
+                j = json.loads(raw)
+                cfg = {
+                    "v": "2", "ps": j.get("ps", "vmess"), "add": j.get("add"),
+                    "port": str(j.get("port")), "id": j.get("id"),
+                    "aid": str(j.get("aid", 0)), "net": "tcp",
+                    "tls": "tls" if j.get("tls") == "tls" else ""
+                }
+                uri = "vmess://" + base64.b64encode(json.dumps(cfg).encode()).decode()
+                name = cfg["ps"]
+            except:
+                return node.strip()
+
+        else:
+            u = urlparse(node)
+            proto = u.scheme.lower()
+            q = parse_qs(u.query)
+            name = unquote(u.fragment) if u.fragment else proto
+
+            # vless - 修正：不再强制剔除非 Reality 节点
+            if proto == "vless":
+                uri = f"vless://{u.username}@{u.hostname}:{u.port or 443}"
+                params = []
+                if q.get("security"): params.append(f"security={q['security'][0]}")
+                if q.get("sni"): params.append(f"sni={q['sni'][0]}")
+                if q.get("flow"): params.append(f"flow={q['flow'][0]}")
+                if params: uri += "?" + "&".join(params)
+
+            # trojan
+            elif proto == "trojan":
+                uri = f"trojan://{u.username}@{u.hostname}:{u.port or 443}"
+                if "sni" in q: uri += f"?sni={q['sni'][0]}"
+
+            # ss
+            elif proto == "ss":
+                if "@" in u.netloc:
+                    cipher, password = u.username, u.password
+                else:
+                    decoded = b64_decode(u.username)
+                    if ":" in decoded: cipher, password = decoded.split(":", 1)
+                    else: return node.strip()
+                raw = f"{cipher}:{password}"
+                enc = base64.b64encode(raw.encode()).decode()
+                uri = f"ss://{enc}@{u.hostname}:{u.port}"
+
+            # hysteria2
+            elif proto in ["hysteria2", "hy2"]:
+                uri = f"hysteria2://{u.username}@{u.hostname}:{u.port}"
+
+            # http/socks5 (包含 HTTP 节点)
+            elif proto in ["http", "socks5"]:
+                uri = f"{proto}://{u.netloc}"
+
+            else:
+                return node.strip()
+
+        # 强制使用 Country_MD5 格式
+        md5_part = hashlib.md5(uri.encode()).hexdigest()[:8]
+        new_name = f"CN_{md5_part}"
+        return f"{uri.split('#')[0]}#{new_name}"
+
+    except:
+        return node.strip()
+
+
+# ----------------------------
+# fingerprint dedup
+# ----------------------------
 def fingerprint(uri):
-    # ... (保持原逻辑)
     return hashlib.md5(uri.encode()).hexdigest()
 
+
 # ----------------------------
-# 主逻辑
+# main
 # ----------------------------
 def extract_nodes():
-    input_file, output_file, b64_output_file = "valid_subs.txt", "all_nodes.txt", "sub_base64.txt"
-    if not os.path.exists(input_file): return
+    if not os.path.exists("valid_subs.txt"):
+        return
 
-    with open(input_file, "r", encoding="utf-8") as f:
-        urls = [i.strip() for i in f if i.strip()]
-
+    urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
     raw_nodes = set()
+
     with ThreadPoolExecutor(max_workers=25) as ex:
-        # 现在 get_nodes_from_url 已定义，这里就不会报错了
         for content in ex.map(get_nodes_from_url, urls):
             if content:
-                for c in re.split(r'[\s\n\r]+', content):
-                    if any(c.startswith(p + "://") for p in PROTOCOLS):
-                        raw_nodes.add(c)
+                chunks = re.split(r'[\s\n\r]+', content)
+                raw_nodes.update(c for c in chunks if any(p + "://" in c for p in PROTOCOLS))
 
-    results, seen_fps = [], set()
+    results = []
+    seen = set()
+
     for n in raw_nodes:
         uri = parse_to_uri(n)
         if not uri: continue
         fp = fingerprint(uri)
-        if fp not in seen_fps:
-            seen_fps.add(fp)
-            results.append(uri)
+        if fp in seen: continue
+        seen.add(fp)
+        results.append(uri)
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write("\n".join(results))
-    with open(b64_output_file, "w", encoding="utf-8") as f:
-        f.write(base64.b64encode("\n".join(results).encode()).decode())
-    print(f"✅ 处理完成，共 {len(results)} 个去重节点。")
+    with open("all_nodes.txt", "w", encoding="utf-8") as f:
+        for r in results:
+            f.write(r + "\n")
+
+    print(f"✅ 完成：已输出 {len(results)} 条节点 -> all_nodes.txt")
+
 
 if __name__ == "__main__":
     extract_nodes()
