@@ -8,7 +8,8 @@ from urllib3.util.retry import Retry
 # 设置工作目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-PROTOCOLS = ["vmess", "trojan", "ss", "ssr", "vless", "hy2", "hysteria2", "hysteria", "tuic", "socks5", "http"]
+# 仅保留指定的协议
+PROTOCOLS = ["vless", "hy2", "hysteria2", "anytls", "hysteria", "tuic"]
 
 # ----------------------------
 # GeoIP & DNS 增强
@@ -97,39 +98,7 @@ def parse_to_uri(node: str):
         # 处理附带在末尾的备注 (去除旧备注)
         clean_node = node.split('#')[0]
         u = urlparse(clean_node)
-        proto = u.scheme.lower()
-        hostname = ""
-
-        # 1. 特殊处理 VMESS (通常是 JSON Base64)
-        if proto == "vmess":
-            try:
-                raw_json = b64_decode(node[8:])
-                j = json.loads(raw_json)
-                hostname = j.get("add")
-                # 重新封装以确保格式标准，但保留核心信息
-                geo_name = get_country_info(hostname)
-                md5_hash = hashlib.md5(node.encode()).hexdigest()[:6]
-                j["ps"] = f"{geo_name}_{md5_hash}"
-                new_json_b64 = base64.b64encode(json.dumps(j).encode()).decode()
-                return f"vmess://{new_json_b64}"
-            except:
-                return node
-
-        # 2. 处理 SS (可能包含插件参数或旧版格式)
-        elif proto == "ss":
-            hostname = u.hostname
-            # 如果 hostname 没解析出来，可能是 ss://base64(user:pass@host:port)
-            if not hostname:
-                try:
-                    # 尝试解析旧版 SS 格式
-                    decoded_ss = b64_decode(u.netloc)
-                    if "@" in decoded_ss:
-                        hostname = decoded_ss.split("@")[1].split(":")[0]
-                except: pass
-
-        # 3. 其他通用协议 (VLESS, Trojan, Hysteria2, etc.)
-        else:
-            hostname = u.hostname
+        hostname = u.hostname
 
         if not hostname:
             return node
@@ -171,8 +140,9 @@ def extract_nodes():
     with ThreadPoolExecutor(max_workers=20) as ex:
         for url, content in ex.map(get_nodes_from_url, urls):
             if content:
-                # 兼容多种换行符和空格
-                nodes_in_sub = re.findall(r'(?:' + '|'.join(PROTOCOLS) + r')://[^\s]+', content)
+                # 仅筛选我们定义的 PROTOCOLS
+                pattern = r'(?:' + '|'.join(PROTOCOLS) + r')://[^\s]+'
+                nodes_in_sub = re.findall(pattern, content, re.IGNORECASE)
                 raw_nodes.update(nodes_in_sub)
                 stats.append({"url": url, "count": len(nodes_in_sub)})
                 print(f"✅ 抓取成功: {url[:40]}... (找到 {len(nodes_in_sub)} 节点)")
