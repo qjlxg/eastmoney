@@ -148,6 +148,7 @@ def extract_nodes():
     exclude_domains = [
         "raw.githubusercontent.com", 
         "upld.zone.id", 
+        "fs.v2rayse.com", 
         "sub.irys.dpdns.org", 
         "vip.putata.dpdns.org", 
         "s3.v2rayse.com"
