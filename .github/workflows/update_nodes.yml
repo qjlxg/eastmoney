@@ -52,5 +52,4 @@ jobs:
           else
             echo "无节点内容更新，跳过提交。"
           fi
-      - name: 
-        run:  python extract_nodes.py
+    
