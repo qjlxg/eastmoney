@@ -121,9 +121,10 @@ def parse_to_uri(node: str):
             else:
                 return node.strip()
 
-        # 强制使用 Country_MD5 格式
+        # 保留原名并追加 MD5 后缀
         md5_part = hashlib.md5(uri.encode()).hexdigest()[:8]
-        new_name = f"CN_{md5_part}"
+        clean_name = re.sub(r'[^\w\u4e00-\u9fa5]', '_', name) # 清理特殊字符
+        new_name = f"{clean_name}_{md5_part}"
         return f"{uri.split('#')[0]}#{new_name}"
 
     except:
@@ -148,9 +149,6 @@ def extract_nodes():
     exclude_domains = [
         "raw.githubusercontent.com", 
         "upld.zone.id", 
-        "rs6.r6r6.xyz",
-        "sub.zlwl.org",
-        "fs.v2rayse.com", 
         "sub.irys.dpdns.org", 
         "vip.putata.dpdns.org", 
         "s3.v2rayse.com"
