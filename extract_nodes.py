@@ -9,7 +9,7 @@ from urllib3.util.retry import Retry
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # 仅保留指定的协议
-PROTOCOLS = ["vless", "hy2", "hysteria2", "anytls", "hysteria", "tuic"]
+PROTOCOLS = ["hy2", "hysteria2", "anytls", "hysteria", "tuic"]
 
 # ----------------------------
 # GeoIP & DNS 增强
