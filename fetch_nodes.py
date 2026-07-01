@@ -33,7 +33,9 @@ BLACKLIST_DOMAINS = [
     'aparat.com', 'rubika.ir', 'uupload.ir', 'uploadboy.com', 'uplod.ir',
     'post.ir', 'cafebazaar.ir', 'snapp.ir', 'arvancloud.ir', 'bertina.ir',
     'radiojavan.com', 'mega.nz', 'f-droid.org', 'visualstudio.com', 'nextjs.org',
-    'kubernetes.io', 'helm.sh', 'cloudflarestatus.com', 'reuters.com'
+    'kubernetes.io', 'helm.sh', 'cloudflarestatus.com', 'reuters.com',
+    'workers.dev', 'github.io', 'sublink.works', 'jiux001.cc', 'jjzsub01.com', 
+    'vijra.ir', 'pasted.ir', 'punkpaste.ir', 'zshabai.cc'
 ]
 
 # 屏蔽常见静态资源后缀 (注意：.yaml 和 .yml 已从中移除)
@@ -109,8 +111,8 @@ def extract_links_from_html(html):
             path = parsed.path.lower()
             u_lower = u.lower()
 
-            # 1. 域名黑名单过滤
-            if any(domain == blk or domain.endswith("." + blk) for blk in BLACKLIST_DOMAINS):
+            # 1. 域名黑名单过滤 (增强：使用包含判断，拦截所有子域名)
+            if any(blk in domain for blk in BLACKLIST_DOMAINS):
                 continue
             
             # 2. IP 黑名单过滤
