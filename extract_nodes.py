@@ -1,200 +1,221 @@
-import re, os, requests, base64, json, hashlib, csv, geoip2.database
-from urllib.parse import urlparse, unquote, parse_qs
+import re, os, requests, base64, json, hashlib, csv, socket
+import geoip2.database
+from urllib.parse import urlparse, unquote, parse_qs, urlencode, urlunparse
 from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# 设置工作目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-PROTOCOLS = [
-    "vmess", "trojan", "http", "ss", "socks5",
-    "vless", "hy2", "hysteria2", "anytls", "hysteria", "tuic"
-]
+PROTOCOLS = ["vmess", "trojan", "ss", "ssr", "vless", "hy2", "hysteria2", "hysteria", "tuic", "socks5", "http"]
 
 # ----------------------------
-# GeoIP 初始化
+# GeoIP & DNS 增强
 # ----------------------------
 GEO_DB_PATH = "GeoLite2-Country.mmdb"
 geo_reader = geoip2.database.Reader(GEO_DB_PATH) if os.path.exists(GEO_DB_PATH) else None
+dns_cache = {}
+geo_cache = {}
 
-def get_country_info(ip):
+def get_ip_from_host(host):
+    if host in dns_cache: return dns_cache[host]
     try:
-        if not geo_reader: return "🌍未知"
+        # 如果本身就是IP则直接返回
+        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+            return host
+        ip = socket.gethostbyname(host)
+        dns_cache[host] = ip
+        return ip
+    except:
+        return None
+
+def get_country_info(host):
+    if host in geo_cache: return geo_cache[host]
+    
+    ip = get_ip_from_host(host)
+    if not ip or not geo_reader:
+        return "Unknown"
+    
+    try:
         response = geo_reader.country(ip)
-        name = response.country.name or "Unknown"
-        return f"{name}"
+        country = response.country.names.get('zh-CN', response.country.name) or "Unknown"
+        geo_cache[host] = country
+        return country
     except:
         return "Unknown"
 
 # ----------------------------
-# requests session
+# 增强型 Base64 解码
+# ----------------------------
+def b64_decode(data: str) -> str:
+    if not data: return ""
+    data = data.strip().replace('-', '+').replace('_', '/')
+    # 补齐长度
+    missing_padding = len(data) % 4
+    if missing_padding:
+        data += '=' * (4 - missing_padding)
+    try:
+        return base64.b64decode(data).decode("utf-8", "ignore")
+    except:
+        return ""
+
+# ----------------------------
+# 网络请求设置
 # ----------------------------
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0"
+    "User-Agent": "v2rayN/6.23", # 模拟常用客户端UA
 })
-retry = Retry(total=2, backoff_factor=0.3,
-              status_forcelist=[500, 502, 503, 504])
+retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
 session.mount("http://", HTTPAdapter(max_retries=retry))
 session.mount("https://", HTTPAdapter(max_retries=retry))
 
-
-# ----------------------------
-# base64 decode
-# ----------------------------
-def b64_decode(data: str) -> str:
-    data = data.strip().replace('-', '+').replace('_', '/')
-    data += "=" * (-len(data) % 4)
-    for func in (base64.b64decode, base64.urlsafe_b64decode):
-        try:
-            return func(data).decode("utf-8", "ignore")
-        except:
-            continue
-    return ""
-
-
-# ----------------------------
-# fetch subscription
-# ----------------------------
 def get_nodes_from_url(url):
     try:
-        r = session.get(url.strip(), timeout=(5, 10))
-        if r.status_code != 200:
-            return url, ""
+        r = session.get(url.strip(), timeout=(5, 15))
+        if r.status_code != 200: return url, ""
         content = r.text.strip()
+        
+        # 尝试解码订阅内容
         decoded = b64_decode(content)
-        result = decoded if any(p + "://" in decoded.lower() for p in PROTOCOLS) else content
-        return url, result
-    except:
+        # 如果解码后包含已知协议，说明是Base64订阅
+        if any(p + "://" in decoded.lower() for p in PROTOCOLS):
+            return url, decoded
+        return url, content
+    except Exception as e:
         return url, ""
 
-
 # ----------------------------
-# parse node -> return URI
+# 节点解析与标准化
 # ----------------------------
 def parse_to_uri(node: str):
     try:
-        if not any(p + "://" in node for p in PROTOCOLS):
-            return None
-
+        node = node.strip()
+        if not node or "://" not in node: return None
+        
+        # 处理附带在末尾的备注 (去除旧备注)
+        clean_node = node.split('#')[0]
+        u = urlparse(clean_node)
+        proto = u.scheme.lower()
         hostname = ""
-        # vmess
-        if node.startswith("vmess://"):
-            raw = b64_decode(node[8:])
-            try:
-                j = json.loads(raw)
-                hostname = j.get("add")
-                cfg = {
-                    "v": "2", "ps": "node", "add": hostname,
-                    "port": str(j.get("port")), "id": j.get("id"),
-                    "aid": str(j.get("aid", 0)), "net": "tcp",
-                    "tls": "tls" if j.get("tls") == "tls" else ""
-                }
-                uri = "vmess://" + base64.b64encode(json.dumps(cfg).encode()).decode()
-            except:
-                return node.strip()
 
+        # 1. 特殊处理 VMESS (通常是 JSON Base64)
+        if proto == "vmess":
+            try:
+                raw_json = b64_decode(node[8:])
+                j = json.loads(raw_json)
+                hostname = j.get("add")
+                # 重新封装以确保格式标准，但保留核心信息
+                geo_name = get_country_info(hostname)
+                md5_hash = hashlib.md5(node.encode()).hexdigest()[:6]
+                j["ps"] = f"{geo_name}_{md5_hash}"
+                new_json_b64 = base64.b64encode(json.dumps(j).encode()).decode()
+                return f"vmess://{new_json_b64}"
+            except:
+                return node
+
+        # 2. 处理 SS (可能包含插件参数或旧版格式)
+        elif proto == "ss":
+            hostname = u.hostname
+            # 如果 hostname 没解析出来，可能是 ss://base64(user:pass@host:port)
+            if not hostname:
+                try:
+                    # 尝试解析旧版 SS 格式
+                    decoded_ss = b64_decode(u.netloc)
+                    if "@" in decoded_ss:
+                        hostname = decoded_ss.split("@")[1].split(":")[0]
+                except: pass
+
+        # 3. 其他通用协议 (VLESS, Trojan, Hysteria2, etc.)
         else:
-            u = urlparse(node)
-            proto = u.scheme.lower()
-            q = parse_qs(u.query)
             hostname = u.hostname
 
-            if proto == "vless":
-                uri = f"vless://{u.username}@{u.hostname}:{u.port or 443}"
-                params = []
-                if q.get("security"): params.append(f"security={q['security'][0]}")
-                if q.get("sni"): params.append(f"sni={q['sni'][0]}")
-                if q.get("flow"): params.append(f"flow={q['flow'][0]}")
-                if params: uri += "?" + "&".join(params)
-            elif proto == "trojan":
-                uri = f"trojan://{u.username}@{u.hostname}:{u.port or 443}"
-                if "sni" in q: uri += f"?sni={q['sni'][0]}"
-            elif proto == "ss":
-                if "@" in u.netloc: cipher, password = u.username, u.password
-                else:
-                    decoded = b64_decode(u.username)
-                    if ":" in decoded: cipher, password = decoded.split(":", 1)
-                    else: return node.strip()
-                raw = f"{cipher}:{password}"
-                enc = base64.b64encode(raw.encode()).decode()
-                uri = f"ss://{enc}@{u.hostname}:{u.port}"
-            elif proto in ["hysteria2", "hy2"]:
-                uri = f"hysteria2://{u.username}@{u.hostname}:{u.port}"
-            elif proto in ["http", "socks5"]:
-                uri = f"{proto}://{u.netloc}"
-            else:
-                return node.strip()
+        if not hostname:
+            return node
 
-        # 使用 GeoIP 获取地区名称
-        geo_name = get_country_info(hostname)
-        md5_part = hashlib.md5(uri.encode()).hexdigest()[:8]
-        new_name = f"{geo_name}_{md5_part}"
-        return f"{uri.split('#')[0]}#{new_name}"
+        # 获取地理位置并生成新备注
+        country = get_country_info(hostname)
+        node_hash = hashlib.md5(node.encode()).hexdigest()[:6]
+        new_tag = f"{country}_{node_hash}"
 
-    except:
-        return node.strip()
+        # 重新组合 URI，确保保留所有原始参数 (Query)
+        # 移除旧的 fragment，添加新的备注
+        new_uri = urlunparse((
+            u.scheme, u.netloc, u.path, u.params, u.query, new_tag
+        ))
+        return new_uri
 
+    except Exception:
+        return node
 
 # ----------------------------
-# fingerprint dedup
-# ----------------------------
-def fingerprint(uri):
-    return hashlib.md5(uri.encode()).hexdigest()
-
-
-# ----------------------------
-# main
+# 主程序
 # ----------------------------
 def extract_nodes():
-    if not os.path.exists("valid_subs.txt"):
+    input_file = "valid_subs.txt"
+    if not os.path.exists(input_file):
+        print(f"❌ 未找到 {input_file}")
         return
 
-    exclude_domains = [
-        "raw.githubusercontent.com", "upld.zone.id", 
-        "sub.irys.dpdns.org", "vip.putata.dpdns.org", "s3.v2rayse.com"
-    ]
-    
-    all_urls = [i.strip() for i in open("valid_subs.txt", encoding="utf-8") if i.strip()]
+    exclude_domains = ["githubusercontent.com", "s3.v2rayse.com"]
+    all_urls = [i.strip() for i in open(input_file, encoding="utf-8") if i.strip() and not i.startswith("#")]
     urls = [url for url in all_urls if not any(d in url for d in exclude_domains)]
     
+    print(f"🚀 开始抓取 {len(urls)} 个订阅源...")
+
     raw_nodes = set()
     stats = []
 
-    with ThreadPoolExecutor(max_workers=25) as ex:
+    # 并发抓取
+    with ThreadPoolExecutor(max_workers=20) as ex:
         for url, content in ex.map(get_nodes_from_url, urls):
             if content:
-                chunks = re.split(r'[\s\n\r]+', content)
-                nodes_in_sub = [c for c in chunks if any(p + "://" in c for p in PROTOCOLS)]
+                # 兼容多种换行符和空格
+                nodes_in_sub = re.findall(r'(?:' + '|'.join(PROTOCOLS) + r')://[^\s]+', content)
                 raw_nodes.update(nodes_in_sub)
                 stats.append({"url": url, "count": len(nodes_in_sub)})
+                print(f"✅ 抓取成功: {url[:40]}... (找到 {len(nodes_in_sub)} 节点)")
             else:
                 stats.append({"url": url, "count": 0})
 
+    # 保存统计
     stats.sort(key=lambda x: x["count"], reverse=True)
     with open("sub_stats.csv", "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["url", "count"])
         writer.writeheader()
         writer.writerows(stats)
 
-    results = []
-    seen = set()
+    # 解析、去重、命名
+    print(f"🔄 正在处理 {len(raw_nodes)} 个原始节点...")
+    final_nodes = []
+    seen_fingerprints = set()
 
     for n in raw_nodes:
-        uri = parse_to_uri(n)
-        if not uri: continue
-        fp = fingerprint(uri)
-        if fp in seen: continue
-        seen.add(fp)
-        results.append(uri)
+        processed_uri = parse_to_uri(n)
+        if not processed_uri: continue
+        
+        # 提取核心部分作为指纹（去除备注部分进行去重）
+        fingerprint = hashlib.md5(processed_uri.split('#')[0].encode()).hexdigest()
+        
+        if fingerprint not in seen_fingerprints:
+            seen_fingerprints.add(fingerprint)
+            final_nodes.append(processed_uri)
 
+    # 写入结果
     with open("all_nodes.txt", "w", encoding="utf-8") as f:
-        for r in results:
-            f.write(r + "\n")
+        for node in final_nodes:
+            f.write(node + "\n")
 
-    print(f"✅ 完成：已输出 {len(results)} 条节点 -> all_nodes.txt")
-    print(f"✅ 完成：已输出统计表 -> sub_stats.csv")
+    # 生成订阅格式 (Base64)
+    with open("sub_base64.txt", "w", encoding="utf-8") as f:
+        b64_content = base64.b64encode("\n".join(final_nodes).encode()).decode()
+        f.write(b64_content)
 
+    print("-" * 30)
+    print(f"⭐ 处理完成!")
+    print(f"📝 有效唯一节点: {len(final_nodes)}")
+    print(f"输出文件: all_nodes.txt (明文), sub_base64.txt (订阅格式)")
 
 if __name__ == "__main__":
     extract_nodes()
