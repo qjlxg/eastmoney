@@ -1,4 +1,4 @@
-import re, os, requests, base64, json, hashlib
+import re, os, requests, base64, json, hashlib, yaml
 from urllib.parse import urlparse, unquote, parse_qs, urlencode, urlunparse
 from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
@@ -36,6 +36,94 @@ def b64_decode(data: str) -> str:
         return ""
 
 # ----------------------------
+# Clash YAML 转 URI 逻辑
+# ----------------------------
+def parse_clash_proxies(content):
+    """
+    从 Clash YAML 中提取节点。修复了 HTTP 拼接错误并完善了 gRPC/Reality 字段映射。
+    """
+    try:
+        data = yaml.safe_load(content)
+        if not data or not isinstance(data, dict) or "proxies" not in data:
+            return []
+        
+        extracted_uris = []
+        for p in data["proxies"]:
+            if not isinstance(p, dict): continue
+            try:
+                ptype = str(p.get("type", "")).lower()
+                name = str(p.get("name", "node"))
+                server = str(p.get("server", ""))
+                port = str(p.get("port", ""))
+                
+                if ptype == "ss":
+                    cipher = p.get("cipher", "")
+                    pwd = p.get("password", "")
+                    # 采用 urlsafe 编码更符合 SS 链接规范
+                    auth = base64.urlsafe_b64encode(f"{cipher}:{pwd}".encode()).decode().replace("=", "")
+                    extracted_uris.append(f"ss://{auth}@{server}:{port}#{name}")
+
+                elif ptype == "trojan":
+                    pwd = p.get("password", "")
+                    sni = p.get("sni", p.get("servername", ""))
+                    query = urlencode({"sni": sni}) if sni else ""
+                    extracted_uris.append(f"trojan://{pwd}@{server}:{port}?{query}#{name}")
+
+                elif ptype == "vless":
+                    uuid = p.get("uuid", "")
+                    params = {
+                        "type": p.get("network", "tcp"),
+                        "security": "tls" if p.get("tls") else "none",
+                        "sni": p.get("servername", p.get("sni", "")),
+                        "flow": p.get("flow", ""),
+                        "fp": p.get("client-fingerprint", ""),
+                        "alpn": p.get("alpn", ""),
+                        "path": p.get("ws-opts", {}).get("path", p.get("grpc-opts", {}).get("service-name", "")),
+                        "host": p.get("ws-opts", {}).get("headers", {}).get("Host", "")
+                    }
+                    if p.get("reality-opts"):
+                        params["security"] = "reality"
+                        params["pbk"] = p["reality-opts"].get("public-key", "")
+                        params["sid"] = p["reality-opts"].get("short-id", "")
+                    
+                    query = urlencode({k: v for k, v in params.items() if v})
+                    extracted_uris.append(f"vless://{uuid}@{server}:{port}?{query}#{name}")
+
+                elif ptype == "vmess":
+                    vj = {
+                        "v": "2", "ps": name, "add": server, "port": port,
+                        "id": p.get("uuid", ""), "aid": p.get("alterId", 0),
+                        "scy": p.get("cipher", "auto"), "net": p.get("network", "tcp"),
+                        "tls": "tls" if p.get("tls") else "",
+                        "sni": p.get("servername", p.get("sni", "")),
+                        "alpn": p.get("alpn", ""), "fp": p.get("client-fingerprint", "")
+                    }
+                    if vj["net"] == "ws" and p.get("ws-opts"):
+                        vj["path"] = p["ws-opts"].get("path", "")
+                        vj["host"] = p["ws-opts"].get("headers", {}).get("Host", "")
+                    elif vj["net"] == "grpc" and p.get("grpc-opts"):
+                        vpath = p["grpc-opts"].get("service-name", "")
+                        vj["path"] = vpath
+                        vj["serviceName"] = vpath # 增强 gRPC 兼容性
+                    
+                    v_str = base64.b64encode(json.dumps(vj, separators=(',', ':')).encode()).decode()
+                    extracted_uris.append(f"vmess://{v_str}")
+
+                elif ptype == "http":
+                    user = p.get("username", "")
+                    pwd = p.get("password", "")
+                    # 修正：auth 已经带了 @，后面不需要再重复 @
+                    auth = f"{user}:{pwd}@" if user else ""
+                    tls = "true" if p.get("tls") else "false"
+                    extracted_uris.append(f"http://{auth}{server}:{port}?tls={tls}#{name}")
+
+            except:
+                continue
+        return extracted_uris
+    except:
+        return []
+
+# ----------------------------
 # 获取订阅内容
 # ----------------------------
 def get_nodes_from_url(url):
@@ -45,18 +133,29 @@ def get_nodes_from_url(url):
         r = session.get(url, timeout=(5, 15))
         if r.status_code != 200:
             return ""
+        # 核心：自动识别编码，防止备注乱码
+        r.encoding = r.apparent_encoding
         content = r.text.strip()
         
-        if re.fullmatch(r"[A-Za-z0-9+/=\s_-]+", content):
-            decoded = b64_decode(content)
+        # 1. 尝试识别并解码 Base64 (增强版判定：允许内容包含空行)
+        clean_content = "".join(content.split())
+        if re.fullmatch(r"[A-Za-z0-9+/=\s_-]+", clean_content):
+            decoded = b64_decode(clean_content)
             if any(p + "://" in decoded.lower() for p in PROTOCOLS):
                 return decoded
+        
+        # 2. 尝试 Clash YAML 解析
+        if "proxies" in content:
+            clash_uris = parse_clash_proxies(content)
+            if clash_uris:
+                return "\n".join(clash_uris)
+                
         return content
     except Exception:
         return ""
 
 # ----------------------------
-# 格式化与规范化 URI (用于最终输出)
+# 格式化与规范化 URI
 # ----------------------------
 def parse_to_uri(node: str):
     try:
@@ -64,36 +163,30 @@ def parse_to_uri(node: str):
         if not any(node.startswith(p + "://") for p in PROTOCOLS):
             return None
 
-        # --- VMess 特殊处理 ---
         if node.startswith("vmess://"):
             raw = b64_decode(node[8:])
             if not raw: return None
             j = json.loads(raw)
-            # 基础字段规范化
             if "v" not in j: j["v"] = "2"
             if "ps" not in j: j["ps"] = "vmess"
-            # 核心地址强制小写
             if "add" in j: j["add"] = j["add"].lower()
-            
             new_json = json.dumps(j, separators=(',', ':'), sort_keys=True, ensure_ascii=False)
             return "vmess://" + base64.b64encode(new_json.encode()).decode()
 
-        # --- 其他协议通用处理 ---
         u = urlparse(node)
-        q = parse_qs(u.query)
+        q = parse_qs(u.query, keep_blank_values=True)
         
-        # 1. 规范化主机名 (转小写)
         netloc = u.netloc
         if u.hostname:
             netloc = netloc.replace(u.hostname, u.hostname.lower())
             
-        # 2. 规范化 Query 参数键值对
         sorted_items = []
         for k in sorted(q.keys()):
-            sorted_items.append((k, sorted(q[k])))
+            # 核心：对连接类参数进行小写对齐，大幅提高去重率
+            vals = [v.strip().lower() if k.lower() in ["tls", "security", "sni", "fp", "net", "type"] else v.strip() for v in q[k]]
+            sorted_items.append((k, sorted(vals)))
         sorted_query = urlencode(sorted_items, doseq=True)
         
-        # 3. 保持原始备注 (fragment) 
         clean_uri = urlunparse((
             u.scheme,
             netloc,
@@ -103,81 +196,49 @@ def parse_to_uri(node: str):
             u.fragment
         ))
         return clean_uri
-
     except Exception:
         return None
 
 # ----------------------------
-# 节点指纹（极高精度去重）
+# 节点指纹 (用于去重)
 # ----------------------------
 def fingerprint(uri):
-    """
-    提取协议身份核心特征，对齐布尔值、大小写，排除无关字段
-    """
     try:
         if uri.startswith("vmess://"):
             raw = b64_decode(uri[8:])
             if not raw: return hashlib.md5(uri.encode()).hexdigest()
             j = json.loads(raw)
-            # VMess 身份核心字段 (移除了 aid, 增加了 serviceName/alpn/fp)
             core = {
                 "add": str(j.get("add", "")).strip().lower(),
                 "port": str(j.get("port", "")).strip(),
                 "id": str(j.get("id", "")).strip().lower(),
                 "net": str(j.get("net", "tcp")).strip().lower(),
-                "type": str(j.get("type", "none")).strip().lower(),
                 "host": str(j.get("host", "")).strip().lower(),
                 "path": str(j.get("path", "")).strip().lower(),
-                "tls": str(j.get("tls", "none")).strip().lower(),
-                "sni": str(j.get("sni", "")).strip().lower(),
-                "serviceName": str(j.get("serviceName", "")).strip().lower(),
-                "alpn": str(j.get("alpn", "")).strip().lower(),
-                "fp": str(j.get("fp", "")).strip().lower(),
+                "tls": str(j.get("tls", "")).strip().lower(),
+                "sni": str(j.get("sni", "")).strip().lower()
             }
             return hashlib.md5(json.dumps(core, sort_keys=True).encode()).hexdigest()
-
         else:
             u = urlparse(uri)
-            # 拆解身份信息，确保 hostname、username 规范化，不含 fragment (备注)
-            identity = [
-                u.scheme.lower(),
-                (u.username or "").lower(),
-                (u.password or ""),
-                (u.hostname or "").lower(),
-                str(u.port or ""),
-                u.path
-            ]
-            
+            # 基础特征：协议 + 用户 + 地址 + 端口 + 路径
+            identity = [u.scheme.lower(), (u.username or "").lower(), (u.password or ""), (u.hostname or "").lower(), str(u.port or ""), u.path]
             q = parse_qs(u.query)
             relevant_params = []
             IGNORE_KEYS = {"ps", "name", "remark", "sub", "t"}
-            
             for k in sorted(q.keys()):
                 k_lower = k.lower()
-                if k_lower in IGNORE_KEYS:
-                    continue
-                
-                vals = q[k]
-                normalized_vals = []
-                for v in vals:
-                    v_clean = v.strip().lower()
-                    # 布尔值对齐：1/true -> true, 0/false -> false
-                    if v_clean in ("1", "true"):
-                        normalized_vals.append("true")
-                    elif v_clean in ("0", "false"):
-                        normalized_vals.append("false")
-                    else:
-                        # 对于 sni, host 等连接字段强制小写，其余保持原样(但去空格)
-                        if k_lower in ("sni", "host", "security", "type", "net", "mode"):
-                            normalized_vals.append(v_clean)
-                        else:
-                            normalized_vals.append(v.strip())
-                
-                relevant_params.append((k_lower, sorted(normalized_vals)))
-            
+                if k_lower in IGNORE_KEYS: continue
+                # 对关键参数进行布尔对齐
+                vals = []
+                for v in q[k]:
+                    v_c = v.strip().lower()
+                    if v_c in ["1", "true"]: v_c = "true"
+                    elif v_c in ["0", "false"]: v_c = "false"
+                    vals.append(v_c)
+                relevant_params.append((k_lower, sorted(vals)))
             identity.append(tuple(relevant_params))
             return hashlib.md5(str(identity).encode()).hexdigest()
-
     except Exception:
         return hashlib.md5(uri.split('#')[0].encode()).hexdigest()
 
@@ -200,12 +261,13 @@ def extract_nodes():
         return
 
     print(f"开始处理 {len(urls)} 个订阅源...")
-
     raw_nodes = set()
 
+    # 使用 ThreadPoolExecutor 并发处理抓取
     with ThreadPoolExecutor(max_workers=25) as ex:
         for content in ex.map(get_nodes_from_url, urls):
             if content:
+                # 统一分割处理
                 chunks = re.split(r'[\s\n\r]+', content)
                 for c in chunks:
                     c = c.strip()
@@ -217,13 +279,9 @@ def extract_nodes():
 
     for n in raw_nodes:
         uri = parse_to_uri(n)
-        if not uri:
-            continue
-
+        if not uri: continue
         fp = fingerprint(uri)
-        if fp in seen_fps:
-            continue
-
+        if fp in seen_fps: continue
         seen_fps.add(fp)
         results.append(uri)
 
@@ -231,10 +289,9 @@ def extract_nodes():
         with open(output_file, "w", encoding="utf-8") as f:
             for r in results:
                 f.write(r + "\n")
-        print(f"✅ 完成：已去重并输出 {len(results)} 条节点 -> {output_file}")
+        print(f"✅ 完成：已输出 {len(results)} 条节点 -> {output_file}")
     except Exception as e:
         print(f"❌ 写入文件失败: {e}")
-
 
 if __name__ == "__main__":
     extract_nodes()
