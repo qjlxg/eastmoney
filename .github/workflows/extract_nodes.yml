@@ -7,6 +7,9 @@ on:
       - '.github/workflows/extract_nodes.yml'
       - 'extract_nodes.py'
   workflow_dispatch:
+  # 增加定时触发：每天 UTC 00:00 (即北京时间 08:00)
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
   extract:
@@ -14,7 +17,6 @@ jobs:
     permissions:
       contents: write
     env:
-      # 设置时区为北京时间
       TZ: Asia/Shanghai
     steps:
       - name: Checkout repository
@@ -51,7 +53,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 确保使用当前北京时间
+          # 获取北京时间
           current_time=$(date +'%Y-%m-%d %H:%M:%S')
           
           git stash
