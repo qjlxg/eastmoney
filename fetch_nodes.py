@@ -14,13 +14,29 @@ CHANNELS_FILE = "channels.txt"
 BASE_PREFIX = "https://t.me/s/" # 自动补全前缀
 MAX_PAGES_PER_CHANNEL = 586       # 每个频道向后翻页的数量
 
-# 屏蔽非订阅类域名
+# 屏蔽非订阅类域名 (大幅增强，包含 AI、社交、音乐、伊朗本地服务等)
 BLACKLIST_DOMAINS = [
-    't.me', 'github.com', 'google.com', 'youtube.com', 
+    't.me', 'github.com', 'google.com', 'youtube.com', 'youtu.be',
     'twitter.com', 'facebook.com', 'telegra.ph', 'instagram.com',
     'www.xrayvip.com', 'link.onesy.link', 'wikipedia.org', 'reddit.com',
-    'apple.com', 'microsoft.com', 'purl.org', 'w3.org'
+    'apple.com', 'microsoft.com', 'purl.org', 'w3.org', 'x.com',
+    'chatgpt.com', 'claude.ai', 'deepseek.com', 'openai.com', 'perplexity.ai',
+    'speedtest.net', 'fast.com', 'spotify.com', 'soundcloud.com',
+    'aparat.com', 'rubika.ir', 'uupload.ir', 'uploadboy.com', 'uplod.ir',
+    'post.ir', 'cafebazaar.ir', 'snapp.ir', 'arvancloud.ir', 'bertina.ir',
+    'radiojavan.com', 'mega.nz', 'f-droid.org', 'visualstudio.com', 'nextjs.org',
+    'kubernetes.io', 'helm.sh', 'cloudflarestatus.com', 'reuters.com'
 ]
+
+# 屏蔽常见静态资源后缀
+BLACKLIST_EXTENSIONS = [
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico',
+    '.mp4', '.mp3', '.m4a', '.pdf', '.exe', '.dmg', '.apk', 
+    '.zip', '.rar', '.7z', '.sh'
+]
+
+# 屏蔽保留/虚假 IP 
+BLACKLIST_IPS = ['0.0.0.0', '1.0.0.0', '127.0.0.1', '8.8.8.8', '1.1.1.1', '9.9.9.9', '4.4.4.4']
 
 session = requests.Session()
 # 增加重试机制：处理 429 (频率限制) 和 5xx 错误
@@ -53,13 +69,12 @@ def extract_links_from_html(html):
     for a in soup.find_all('a', href=True):
         found_raw_urls.append(a['href'])
 
-    # 2. 提取文本中所有的裸链接 (增强正则：包含 @, ~, +, $, # 等符号)
+    # 2. 提取文本中所有的裸链接
     text = soup.get_text()
     raw_text_urls = re.findall(r'https?://[^\s<>"\']+', text)
     found_raw_urls.extend(raw_text_urls)
 
     # 3. 提取可能的 Base64 编码链接
-    # 匹配疑似 Base64 的块，优先检查以 aHR0 (http) 开头的块
     b64_blocks = re.findall(r'[a-zA-Z0-9+/=]{20,}', text)
     for block in b64_blocks:
         if block.startswith("aHR0"): # 快速过滤
@@ -69,7 +84,8 @@ def extract_links_from_html(html):
 
     clean_subs = []
     for u in found_raw_urls:
-        # 清理末尾干扰字符
+        # 增强清理：递归清理末尾的干扰字符，包括常见的非 ASCII 字符（解决你结果中出现的 #ساب 等干扰）
+        u = re.split(r'[^\x00-\x7F]+', u)[0] # 遇到非 ASCII 字符（如波斯语、表情符号）直接截断
         u = u.strip().rstrip(').,;!]>》】"\'#')
         
         try:
@@ -77,11 +93,25 @@ def extract_links_from_html(html):
             if not parsed.scheme or not parsed.netloc:
                 continue
             
+            # 过滤非 http/https 协议 (如 tg://)
+            if parsed.scheme not in ['http', 'https']:
+                continue
+
             domain = parsed.netloc.lower()
-            # 精确域名与子域名黑名单过滤
+            path = parsed.path.lower()
+
+            # 1. 域名黑名单过滤
             if any(domain == blk or domain.endswith("." + blk) for blk in BLACKLIST_DOMAINS):
                 continue
             
+            # 2. IP 黑名单过滤
+            if domain in BLACKLIST_IPS:
+                continue
+
+            # 3. 后缀名黑名单过滤
+            if any(path.endswith(ext) for ext in BLACKLIST_EXTENSIONS):
+                continue
+
             if len(u) < 15: 
                 continue
                 
