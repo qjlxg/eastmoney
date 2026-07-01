@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 # =========================
 CHANNELS_FILE = "channels.txt"
 BASE_PREFIX = "https://t.me/s/" # 自动补全前缀
-MAX_PAGES_PER_CHANNEL = 18     # 每个频道向后翻页的数量
+MAX_PAGES_PER_CHANNEL = 3     # 每个频道向后翻页的数量
 
 # 订阅特征关键字 (URL 包含以下任意词汇将被优先视为订阅链接)
 SUBSCRIPTION_KEYWORDS = [
